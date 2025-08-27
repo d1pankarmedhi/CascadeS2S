@@ -1,11 +1,29 @@
-version: '3.8'
-
 services:
-  stt-service:
-    build: .
-    container_name: stt-service
+  stt-api:
+    build: ./api 
+    container_name: stt-api
     ports:
       - "8000:8000"
-    command: uvicorn api:app --host 0.0.0.0 --port 8000
     volumes:
-      - .:/app
+      # - .:/app # mount . dir to /app in container
+      - ./shared_data:/app/shared_data
+
+    depends_on:
+      - redis
+    
+  stt-worker:
+    build: ./worker
+    container_name: stt-worker
+    # The worker also needs access to the shared volume
+    volumes:
+      - ./shared_data:/app/shared_data
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:8.2.1-alpine
+    container_name: redis-queue
+    ports:
+      - "6379:6379"
+
+

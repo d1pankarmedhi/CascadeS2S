@@ -1,6 +1,4 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
-fastapi[all]>=0.116.1
 openai-whisper>=20250625
 torch>=2.8.0
-uvicorn>=0.35.0
 redis>=6.4.0
