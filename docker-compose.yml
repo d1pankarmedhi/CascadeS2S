@@ -1,7 +1,6 @@
 services:
   stt-api:
     build: ./api 
-    container_name: stt-api
     ports:
       - "8000:8000"
     volumes:
@@ -10,20 +9,43 @@ services:
 
     depends_on:
       - redis
-    
+
   stt-worker:
-    build: ./worker
-    container_name: stt-worker
-    # The worker also needs access to the shared volume
+    build: ./stt-worker
     volumes:
       - ./shared_data:/app/shared_data
     depends_on:
       - redis
+    deploy:
+      replicas: 1
+    
+  llm-worker:
+    build: ./llm-worker
+    volumes:
+      - ./shared_data:/app/shared_data
+    depends_on:
+      - redis
+    deploy:
+      replicas: 1
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
 
+
+  tts-worker:
+    build: ./tts-worker
+    volumes:
+      - ./shared_data:/app/shared_data
+    depends_on:
+      - redis
+      - llm-worker
+    deploy:
+      replicas: 1
+  
   redis:
-    image: redis:8.2.1-alpine
+    image: redis:6.2-alpine
     container_name: redis-queue
     ports:
       - "6379:6379"
+
 
 

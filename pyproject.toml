@@ -1,6 +1,7 @@
 [project]
 dependencies = [
     "fastapi[all]>=0.116.1",
+    "google-genai>=1.31.0",
     "openai-whisper>=20250625",
     "redis>=6.4.0",
     "torch>=2.8.0",

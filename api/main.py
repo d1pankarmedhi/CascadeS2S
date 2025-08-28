@@ -36,6 +36,7 @@ async def queue_transcription(audio_file: UploadFile = File(...)):
         raise HTTPException(status_code=503, detail="Redis service is not available.")
 
     job_id = str(uuid.uuid4())
+    os.makedirs("shared_data", exist_ok=True)
     file_path = f"shared_data/{job_id}_{audio_file.filename}"
 
     try:
