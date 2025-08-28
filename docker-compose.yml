@@ -1,0 +1,51 @@
+services:
+  stt-api:
+    build: ./api 
+    ports:
+      - "8000:8000"
+    volumes:
+      # - .:/app # mount . dir to /app in container
+      - ./shared_data:/app/shared_data
+
+    depends_on:
+      - redis
+
+  stt-worker:
+    build: ./stt-worker
+    volumes:
+      - ./shared_data:/app/shared_data
+    depends_on:
+      - redis
+    deploy:
+      replicas: 1
+    
+  llm-worker:
+    build: ./llm-worker
+    volumes:
+      - ./shared_data:/app/shared_data
+    depends_on:
+      - redis
+    deploy:
+      replicas: 1
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+
+
+  tts-worker:
+    build: ./tts-worker
+    volumes:
+      - ./shared_data:/app/shared_data
+    depends_on:
+      - redis
+      - llm-worker
+    deploy:
+      replicas: 1
+  
+  redis:
+    image: redis:6.2-alpine
+    container_name: redis-queue
+    ports:
+      - "6379:6379"
+
+
+
