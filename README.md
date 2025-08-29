@@ -1,6 +1,13 @@
-# Cascade Speech-to-Speech
+<div align="center">
+<h1>Cascade Speech-to-Speech</h1>
+<p>A distributed speech-to-speech pipeline that converts speech input to text, processes it through an LLM, and converts the response back to speech. Built with microservices architecture using FastAPI, Redis, and Docker.
+</p>
 
-A distributed speech-to-speech pipeline that converts speech input to text, processes it through an LLM, and converts the response back to speech. Built with microservices architecture using FastAPI, Redis, and Docker.
+![Python](https://img.shields.io/badge/Python-blue.svg?style=flat&logo=python&logoColor=white) ![Hugging Face](https://img.shields.io/badge/Hugging%20Face-FFD21E?logo=huggingface&logoColor=000) ![Redis](https://img.shields.io/badge/Redis-%23DD0031.svg?logo=redis&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=fff) ![Google Gemini](https://img.shields.io/badge/Google%20Gemini-886FBF?logo=googlegemini&logoColor=fff)
+
+</div>
+
+
 
 ## 🌟 Features
 
