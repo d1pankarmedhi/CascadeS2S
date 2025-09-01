@@ -5,6 +5,8 @@
 
 ![Python](https://img.shields.io/badge/Python-blue.svg?style=flat&logo=python&logoColor=white) ![Hugging Face](https://img.shields.io/badge/Hugging%20Face-FFD21E?logo=huggingface&logoColor=000) ![Redis](https://img.shields.io/badge/Redis-%23DD0031.svg?logo=redis&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=fff) ![Google Gemini](https://img.shields.io/badge/Google%20Gemini-886FBF?logo=googlegemini&logoColor=fff)
 
+<img width="800" height="137" alt="image" src="https://github.com/user-attachments/assets/552b2bdc-0ce1-4ad5-8a3a-f85df39567a1" />
+
 </div>
 
 
