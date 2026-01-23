@@ -1,6 +1,6 @@
 <div align="center">
 <h1>Cascade Speech-to-Speech</h1>
-<p>A distributed speech-to-speech pipeline that converts speech input to text, processes it through an LLM, and converts the response back to speech. Built with microservices architecture using FastAPI, Redis, and Docker.
+<p>A real-time voice agent platform that enables natural conversations with AI. Built with microservices architecture using FastAPI, WebSockets, Redis, and powered by faster-whisper for 10x faster transcription.
 </p>
 
 ![Python](https://img.shields.io/badge/Python-blue.svg?style=flat&logo=python&logoColor=white) ![Hugging Face](https://img.shields.io/badge/Hugging%20Face-FFD21E?logo=huggingface&logoColor=000) ![Redis](https://img.shields.io/badge/Redis-%23DD0031.svg?logo=redis&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=fff) ![Google Gemini](https://img.shields.io/badge/Google%20Gemini-886FBF?logo=googlegemini&logoColor=fff)
@@ -13,53 +13,64 @@
 
 ## 🌟 Features
 
-- Speech-to-Text conversion using ML models
-- LLM processing of transcribed text
-- Text-to-Speech synthesis
-- Asynchronous job processing
-- Microservices architecture
-- Docker containerization
-- Redis-based job queue system
-- Robust error handling and logging
+- **Real-Time Voice Conversations**: Talk directly to AI with minimal latency (< 2 seconds)
+- **Beautiful Web Interface**: Premium dark mode UI with glassmorphism effects
+- **WebSocket Streaming**: Bidirectional audio streaming for live interactions
+- **Faster-Whisper Integration**: 10x faster transcription compared to OpenAI Whisper
+- **Conversational AI**: Natural, context-aware responses optimized for voice
+- **Microservices Architecture**: Scalable, distributed system design
+- **Docker Containerization**: Easy deployment and orchestration
+- **Redis Pub/Sub**: Real-time communication between services
+- **Batch Processing Support**: Legacy API for file-based processing
+- **Robust Error Handling**: Comprehensive logging and error recovery
 
 ## 🏗️ Architecture
 
-The project is structured into several microservices:
+The project features dual-mode operation: **Real-Time** and **Batch Processing**.
 
 ```
-├── api/               # API service for handling HTTP requests
-├── stt-worker/        # Speech-to-Text worker service
-├── llm-worker/        # Language Model worker service
-├── tts-worker/        # Text-to-Speech worker service
+├── api/               # WebSocket & REST API service
+├── stt-worker/        # Speech-to-Text (faster-whisper)
+├── llm-worker/        # Language Model (Google Gemini)
+├── tts-worker/        # Text-to-Speech (ParlerTTS)
 └── docker-compose.yml # Container orchestration
 ```
 
-### Component Pipeline
+### Real-Time Voice Agent Pipeline
 
-1. **API Service** (`api/`)
-   - Handles incoming audio file uploads
-   - Generates unique job IDs
-   - Queues jobs for processing
-   - Provides status endpoints
+1. **Web Interface** (`api/static/`)
+   - Beautiful, responsive voice UI
+   - Real-time microphone access
+   - WebSocket client for audio streaming
+   - Live conversation display
 
-2. **Speech-to-Text Worker** (`stt-worker/`)
-   - Processes audio files from the queue
-   - Converts speech to text
-   - Forwards text to LLM queue
+2. **API Service** (`api/`)
+   - WebSocket endpoint for bidirectional streaming
+   - Session management for concurrent users
+   - Redis pub/sub for worker communication
+   - Static file serving
 
-3. **LLM Worker** (`llm-worker/`)
-   - Processes text using LLM models
-   - Generates responses
-   - Queues text for speech synthesis
-  
-4. **TTS Worker** (`tts-worker/`)
-   - Process text from the queue
-   - Converts text to speech
+3. **Speech-to-Text Worker** (`stt-worker/`)
+   - Receives audio chunks via Redis pub/sub
+   - Uses faster-whisper for 10x speed improvement
+   - Processes audio in real-time
+   - Forwards transcription to LLM
 
-5. **Redis Queue System**
-   - Manages job queues between services
-   - Handles job status tracking
-   - Ensures reliable message passing
+4. **LLM Worker** (`llm-worker/`)
+   - Processes text via Redis pub/sub
+   - Optimized conversational prompts
+   - Generates concise, natural responses
+   - Sends text to TTS
+
+5. **TTS Worker** (`tts-worker/`)
+   - Synthesizes speech via Redis pub/sub
+   - Generates audio files
+   - Streams audio back to client
+   
+6. **Redis**
+   - Pub/sub channels for real-time communication
+   - Queues for batch processing
+   - Session data storage
 
 ## 🚀 Getting Started
 
@@ -71,18 +82,44 @@ The project is structured into several microservices:
    cd CascadeS2S
    ```
 
-2. Add env variables to `.env` file :
+2. Start the services:
    ```bash
-   # .env 
-   GEMINI_API_KEY = <your-api-key>
+   docker compose up --build
+   ```
+   *Note: On first startup, Ollama will automatically pull the Qwen 2.5:3b model (approx. 1.9GB). Subsequent starts will be immediate.*
+
+### Management Script
+
+For convenience, a `manage.sh` script is provided to handle common operations:
+
+- **Start**: `./manage.sh start` (Builds and starts in detached mode)
+- **Stop**: `./manage.sh stop`
+- **Logs**: `./manage.sh logs` (Follow logs)
+- **Status**: `./manage.sh status`
+- **Pull Model**: `./manage.sh pull-llm` (Manually pull Qwen 2.5)
+- **Clean**: `./manage.sh clean` (Remove containers and images)
+
+### Real-Time Voice Agent Usage
+
+1. **Open your browser** and navigate to:
+   ```
+   http://localhost:8000
    ```
 
-3. Start the services:
-   ```bash
-   docker-compose up --build
-   ```
+2. **Grant microphone permissions** when prompted
 
-### API Usage
+3. **Click "Start Conversation"** to begin talking with the AI
+
+4. **Speak naturally** - your voice is processed in real-time with these steps:
+   - Your speech is captured and streamed
+   - Transcribed to text (faster-whisper)
+   - Processed by AI (Google Gemini)
+   - Converted back to speech (ParlerTTS)
+   - Played back automatically
+
+5. **Watch the conversation** unfold in the transcript panel
+
+### Legacy Batch Processing API
 
 #### Submit Audio for Processing
 

@@ -4,8 +4,8 @@ FROM python:3.10 as builder
 WORKDIR /build
 
 # Install Python dependencies
-COPY ./requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY ./tts-worker/requirements.txt .
+RUN pip install --default-timeout=100 --no-cache-dir -r requirements.txt
 
 # Download the ParlerTTS model and tokenizer during the build process
 RUN python -c "from parler_tts import ParlerTTSForConditionalGeneration; from transformers import AutoTokenizer; ParlerTTSForConditionalGeneration.from_pretrained('parler-tts/parler-tts-tiny-v1'); AutoTokenizer.from_pretrained('parler-tts/parler-tts-tiny-v1')"
@@ -23,7 +23,8 @@ RUN mkdir -p /root/.cache/huggingface/hub/
 COPY --from=builder /root/.cache/huggingface/hub/ /root/.cache/huggingface/hub/
 
 # Copy the application code
-COPY . .
+COPY ./tts-worker/ .
+COPY ./utils/logger.py .
 
 # Command to run the worker script
 CMD ["python", "worker.py"]

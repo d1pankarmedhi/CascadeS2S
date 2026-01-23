@@ -1,40 +1,55 @@
 services:
   stt-api:
-    build: ./api 
+    build:
+      context: .
+      dockerfile: api/Dockerfile
     ports:
       - "8000:8000"
     volumes:
-      # - .:/app # mount . dir to /app in container
       - ./shared_data:/app/shared_data
-
+      - ./api/static:/app/static
+      - ./output:/app/output
     depends_on:
       - redis
 
   stt-worker:
-    build: ./stt-worker
+    build:
+      context: .
+      dockerfile: stt-worker/Dockerfile
     volumes:
       - ./shared_data:/app/shared_data
+      - ./output:/app/output
     depends_on:
       - redis
     deploy:
       replicas: 1
     
   llm-worker:
-    build: ./llm-worker
+    build:
+      context: .
+      dockerfile: llm-worker/Dockerfile
     volumes:
       - ./shared_data:/app/shared_data
+      - ./output:/app/output
     depends_on:
       - redis
+      - ollama
     deploy:
       replicas: 1
-    environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    volumes:
+      - ./ollama:/root/.ollama
 
   tts-worker:
-    build: ./tts-worker
+    build:
+      context: .
+      dockerfile: tts-worker/Dockerfile
     volumes:
       - ./shared_data:/app/shared_data
+      - ./output:/app/output
     depends_on:
       - redis
       - llm-worker

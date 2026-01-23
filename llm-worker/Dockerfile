@@ -2,9 +2,10 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-COPY ./requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY ./llm-worker/requirements.txt .
+RUN pip install --default-timeout=100 --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY ./llm-worker/ .
+COPY ./utils/logger.py .
 
 CMD ["python", "worker.py"]
