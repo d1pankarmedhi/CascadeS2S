@@ -3,12 +3,17 @@ FROM python:3.10 as builder
 
 WORKDIR /build
 
-# Install Python dependencies
-COPY ./tts-worker/requirements.txt .
-RUN pip install --default-timeout=100 --no-cache-dir -r requirements.txt
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uv/bin/
+ENV PATH="/uv/bin:${PATH}"
+ENV UV_HTTP_TIMEOUT=300
 
-# Download the ParlerTTS model and tokenizer during the build process
-RUN python -c "from parler_tts import ParlerTTSForConditionalGeneration; from transformers import AutoTokenizer; ParlerTTSForConditionalGeneration.from_pretrained('parler-tts/parler-tts-tiny-v1'); AutoTokenizer.from_pretrained('parler-tts/parler-tts-tiny-v1')"
+# Install Python dependencies using uv
+COPY ./tts-worker/requirements.txt .
+RUN uv pip install --system --no-cache-dir -r requirements.txt
+
+# Download the Qwen3-TTS model during the build process
+RUN python -c "from qwen_tts import Qwen3TTSModel; Qwen3TTSModel.from_pretrained('Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice')"
 
 # Stage 2: The Final Application Stage
 FROM python:3.10-slim

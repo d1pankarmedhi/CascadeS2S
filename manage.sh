@@ -20,6 +20,7 @@ show_usage() {
     echo "  status      Show status of all services"
     echo "  clean       Stop services and remove containers, networks, and images"
     echo "  pull-llm    Manually trigger Ollama to pull the Qwen 2.5 model"
+    echo "  build       Build all services"
     echo "  help        Show this help message"
 }
 
@@ -64,6 +65,10 @@ case "$1" in
     pull-llm)
         echo -e "${GREEN}Triggering model pull for Qwen 2.5:3b...${NC}"
         docker exec -it ollama ollama pull qwen2.5:3b
+        ;;
+    build)
+        echo -e "${GREEN}Building CascadeS2S services...${NC}"
+        $DOCKER_COMPOSE build
         ;;
     help|*)
         show_usage

@@ -8,9 +8,8 @@ import threading
 import redis
 import soundfile as sf
 import torch
+from qwen_tts import Qwen3TTSModel
 from logger import setup_logger
-from parler_tts import ParlerTTSForConditionalGeneration
-from transformers import AutoTokenizer
 
 logger = setup_logger("tts_worker")
 
@@ -23,30 +22,30 @@ except redis.exceptions.ConnectionError as e:
     logger.error(f"TTS Worker could not connect to Redis: {e}")
     r = None
 
-# --- ParlerTTS Model Setup ---
+# --- Qwen3-TTS Model Setup ---
 # Set device to GPU if available, otherwise use CPU
 device = "cuda:0" if torch.cuda.is_available() else "cpu"
 logger.info(f"Using device: {device}")
 
 try:
-    # Load the model and tokenizer - using tiny for faster generation
-    model = ParlerTTSForConditionalGeneration.from_pretrained(
-        "parler-tts/parler-tts-tiny-v1"
-    ).to(device)
-    tokenizer = AutoTokenizer.from_pretrained("parler-tts/parler-tts-tiny-v1")
-    logger.info("ParlerTTS model and tokenizer loaded successfully!")
+    # Load the Qwen3-TTS 0.6B-CustomVoice model
+    # Note: dtype and attn_implementation can be adjusted based on GPU capabilities
+    model = Qwen3TTSModel.from_pretrained(
+        "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
+        device_map=device,
+        dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
+        # Use flash_attention_2 if supported and enabled in requirements
+        # attn_implementation="flash_attention_2" if torch.cuda.is_available() else "eager"
+    )
+    logger.info("Qwen3-TTS 0.6B-CustomVoice model loaded successfully!")
 except Exception as e:
     model = None
-    tokenizer = None
-    logger.error(f"Error loading ParlerTTS model: {e}")
-
-# Voice description for consistent voice
-DEFAULT_VOICE_DESCRIPTION = "A clear, friendly voice with natural pacing, sounding like a helpful assistant."
+    logger.error(f"Error loading Qwen3-TTS model: {e}")
 
 
 def synthesize_speech(text: str, output_path: str) -> bool:
     """
-    Synthesize speech from text and save to file.
+    Synthesize speech from text and save to file using Qwen3-TTS CustomVoice.
     
     Args:
         text: Text to synthesize
@@ -55,33 +54,28 @@ def synthesize_speech(text: str, output_path: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    if not model or not tokenizer:
+    if not model:
         logger.error("TTS model not loaded")
         return False
     
     try:
-        # Prepare inputs
-        input_ids = tokenizer(
-            DEFAULT_VOICE_DESCRIPTION, return_tensors="pt"
-        ).input_ids.to(device)
-        prompt_input_ids = tokenizer(
-            text, return_tensors="pt"
-        ).input_ids.to(device)
-
-        # Generate audio
-        generation = model.generate(
-            input_ids=input_ids, prompt_input_ids=prompt_input_ids
+        # Generate audio using Qwen3-TTS CustomVoice
+        # Using default speaker "Vivian"
+        wavs, sr = model.generate_custom_voice(
+            text=text,
+            language="Auto",
+            speaker="Vivian",
+            instruct="", # Can be used for emotive speech
         )
-        audio_arr = generation.cpu().numpy().squeeze()
-
+        
         # Save audio file
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        sf.write(output_path, audio_arr, model.config.sampling_rate)
+        sf.write(output_path, wavs[0], sr)
         
         return True
         
     except Exception as e:
-        logger.error(f"Error synthesizing speech: {e}")
+        logger.error(f"Error synthesizing speech with Qwen3-TTS: {e}")
         return False
 
 

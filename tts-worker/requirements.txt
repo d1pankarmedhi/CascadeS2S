@@ -1,3 +1,7 @@
 redis>=6.4.0
-git+https://github.com/huggingface/parler-tts.git
+qwen-tts
+soundfile
+torch
+torchaudio
 transformers
+accelerate
