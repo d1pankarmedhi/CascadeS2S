@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
+      args:
+        - DEVICE=${DEVICE:-cpu}
     ports:
       - "8000:8000"
     volumes:
@@ -16,6 +18,8 @@ services:
     build:
       context: .
       dockerfile: stt-worker/Dockerfile
+      args:
+        - DEVICE=${DEVICE:-cpu}
     volumes:
       - ./shared_data:/app/shared_data
       - ./output:/app/output
@@ -28,6 +32,8 @@ services:
     build:
       context: .
       dockerfile: llm-worker/Dockerfile
+      args:
+        - DEVICE=${DEVICE:-cpu}
     volumes:
       - ./shared_data:/app/shared_data
       - ./output:/app/output
@@ -47,6 +53,8 @@ services:
     build:
       context: .
       dockerfile: tts-worker/Dockerfile
+      args:
+        - DEVICE=${DEVICE:-cpu}
     volumes:
       - ./shared_data:/app/shared_data
       - ./output:/app/output

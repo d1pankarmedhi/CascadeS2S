@@ -10,18 +10,18 @@ NC='\033[0m' # No Color
 
 # Function to show usage
 show_usage() {
-    echo "Usage: ./manage.sh [command]"
+    echo "Usage: ./manage.sh [command] [options]"
     echo ""
     echo "Commands:"
-    echo "  start       Build and start all services in detached mode"
-    echo "  stop        Stop all running services"
-    echo "  restart     Restart all services"
-    echo "  logs        Follow logs for all services"
-    echo "  status      Show status of all services"
-    echo "  clean       Stop services and remove containers, networks, and images"
-    echo "  pull-llm    Manually trigger Ollama to pull the Qwen 2.5 model"
-    echo "  build       Build all services"
-    echo "  help        Show this help message"
+    echo "  start [cpu|gpu]  Build and start all services (default: cpu)"
+    echo "  stop             Stop all running services"
+    echo "  restart          Restart all services"
+    echo "  logs             Follow logs for all services"
+    echo "  status           Show status of all services"
+    echo "  clean            Stop services and remove containers, networks, and images"
+    echo "  pull-llm         Manually trigger Ollama to pull the Qwen 2.5 model"
+    echo "  build [cpu|gpu]  Build all services (default: cpu)"
+    echo "  help             Show this help message"
 }
 
 # Check for docker-compose command availability
@@ -36,8 +36,9 @@ fi
 
 case "$1" in
     start)
-        echo -e "${GREEN}Starting CascadeS2S services...${NC}"
-        $DOCKER_COMPOSE up --build -d
+        DEVICE=${2:-cpu}
+        echo -e "${GREEN}Starting CascadeS2S services (Device: $DEVICE)...${NC}"
+        DEVICE=$DEVICE $DOCKER_COMPOSE up --build -d
         echo -e "${GREEN}Application is starting at http://localhost:8000${NC}"
         ;;
     stop)
@@ -67,8 +68,9 @@ case "$1" in
         docker exec -it ollama ollama pull qwen2.5:3b
         ;;
     build)
-        echo -e "${GREEN}Building CascadeS2S services...${NC}"
-        $DOCKER_COMPOSE build
+        DEVICE=${2:-cpu}
+        echo -e "${GREEN}Building CascadeS2S services (Device: $DEVICE)...${NC}"
+        DEVICE=$DEVICE $DOCKER_COMPOSE build
         ;;
     help|*)
         show_usage
