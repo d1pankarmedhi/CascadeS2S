@@ -58,6 +58,18 @@ def ensure_model_pulled():
             time.sleep(30)
 
 
+def generate_response(text_input):
+    """Generate a non-streaming response from Ollama."""
+    response = client.chat(
+        model=MODEL_NAME,
+        messages=[
+            {'role': 'system', 'content': 'You are a helpful voice assistant. Give concise, natural responses as if in a spoken conversation in English. Keep responses brief (1-3 sentences).'},
+            {'role': 'user', 'content': text_input},
+        ],
+    )
+    return response['message']['content']
+
+
 def process_realtime_requests():
     """
     Listens for real-time LLM requests via Redis pubsub.
@@ -200,7 +212,11 @@ def process_batch_jobs():
 
                     if model_ready:
                         # Push the result to the new 'tts_jobs' queue for the next stage
-                        tts_payload = {"job_id": job_id, "text_to_speech": llm_response}
+                        tts_payload = {
+                            "job_id": job_id, 
+                            "text_to_speech": llm_response,
+                            "transcription": text_input
+                        }
                         r.lpush("tts_jobs", json.dumps(tts_payload))
                         logger.info(f"LLM Worker completed job {job_id}. Pushed to TTS queue.")
                     else:

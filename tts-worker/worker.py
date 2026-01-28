@@ -180,6 +180,8 @@ def process_batch_jobs():
                         "job_id": job_id,
                         "status": "completed",
                         "final_audio_path": audio_filename,
+                        "transcription": job_payload.get("transcription"),
+                        "llm_response": text_to_speech
                     }
                     r.set(f"result:{job_id}", json.dumps(final_payload))
                     logger.info(f"TTS Worker completed job {job_id}. Final audio saved.")

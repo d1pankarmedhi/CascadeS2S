@@ -127,13 +127,13 @@ async def websocket_voice_endpoint(websocket: WebSocket):
                 if session_data["chunks"] % 20 == 0:
                     print(f"Session {session_id}: Received {session_data['chunks']} chunks ({session_data['bytes']} total bytes)")
                 
-                # Send to STT worker via Redis pubsub
-                job_payload = {
-                    "session_id": session_id,
-                    "audio_chunk": audio_chunk.hex(),
-                    "timestamp": asyncio.get_event_loop().time()
-                }
-                r.publish("realtime_audio", json.dumps(job_payload))
+                # Send to STT worker via Redis - Optimization: Use raw binary instead of hex JSON
+                # Protocol: [4-byte session_id length][session_id][audio_chunk]
+                sid_bytes = session_id.encode('utf-8')
+                sid_len = len(sid_bytes).to_bytes(4, byteorder='big')
+                binary_payload = sid_len + sid_bytes + audio_chunk
+                
+                r.publish("realtime_audio", binary_payload)
             
             elif "text" in data:
                 message = json.loads(data["text"])
