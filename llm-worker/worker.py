@@ -13,7 +13,7 @@ load_dotenv()
 
 # Configuration
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
-MODEL_NAME = "qwen2.5:3b"
+MODEL_NAME = "qwen2.5:1.5b"
 logger = setup_logger("llm_worker")
 
 # State
@@ -69,7 +69,7 @@ def generate_response(text_input: str) -> str:
     try:
         # We use a system prompt to keep responses concise for voice output
         response = client.chat(model=MODEL_NAME, messages=[
-            {'role': 'system', 'content': 'You are a helpful voice assistant. Give concise, natural responses as if in a spoken conversation. Keep responses brief (1-3 sentences).'},
+            {'role': 'system', 'content': 'You are a helpful voice assistant. Give concise, natural responses as if in a spoken conversation in English. Keep responses brief (1-3 sentences).'},
             {'role': 'user', 'content': text_input},
         ])
         return response['message']['content']
@@ -102,12 +102,15 @@ def process_realtime_requests():
                     if not session_id or not text_input:
                         continue
                     
+                    metrics = data.get("metrics", {})
+                    trigger_time = metrics.get("trigger_time", time.time())
+                    
                     logger.info(f"Processing real-time request for session {session_id} ({len(text_input)} chars)")
                     
                     # Generate LLM response
                     start_time = time.time()
                     llm_response = generate_response(text_input)
-                    latency = (time.time() - start_time) * 1000
+                    llm_latency_ms = (time.time() - start_time) * 1000
                     
                     # Send response to client
                     r.publish(f"response:{session_id}", json.dumps({
@@ -117,13 +120,17 @@ def process_realtime_requests():
                     
                     # Send to TTS worker (only if model was ready, otherwise it's just a status text)
                     if model_ready:
+                        # Update metrics for TTS
+                        metrics["llm_latency_ms"] = llm_latency_ms
+                        
                         tts_payload = {
                             "session_id": session_id,
-                            "text_to_speech": llm_response
+                            "text_to_speech": llm_response,
+                            "metrics": metrics
                         }
                         r.publish("realtime_tts", json.dumps(tts_payload))
                     
-                    logger.info(f"LLM response sent for session {session_id}: {llm_response[:50]}...")
+                    logger.info(f"LLM response sent for session {session_id} (Latency: {llm_latency_ms:.2f}ms): {llm_response[:50]}...")
                     
                 except Exception as e:
                     logger.error(f"Error processing real-time LLM request: {e}")

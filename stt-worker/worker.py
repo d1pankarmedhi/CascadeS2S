@@ -50,8 +50,13 @@ def process_realtime_audio():
                             
                             logger.info(f"Processing end of stream for session {session_id}")
                             
+                            # --- Start Transcription Process ---
+                            trigger_time = time.time()
+                            
                             # Transcribe accumulated audio
                             transcription = transcribe_audio_bytes(audio_bytes)
+                            
+                            stt_latency_ms = (time.time() - trigger_time) * 1000
                             
                             if transcription:
                                 # Send transcription to client
@@ -60,14 +65,18 @@ def process_realtime_audio():
                                     "text": transcription
                                 }))
                                 
-                                # Send to LLM worker
+                                # Send to LLM worker with latency tracking
                                 llm_payload = {
                                     "session_id": session_id,
                                     "text_input": transcription,
+                                    "metrics": {
+                                        "trigger_time": trigger_time,
+                                        "stt_latency_ms": stt_latency_ms
+                                    }
                                 }
                                 r.publish("realtime_llm", json.dumps(llm_payload))
                                 
-                                logger.info(f"Transcription sent for session {session_id}: {transcription[:50]}...")
+                                logger.info(f"Transcription sent for session {session_id} (Latency: {stt_latency_ms:.2f}ms): {transcription[:50]}...")
                             
                             # Clear buffer
                             session_buffers[session_id] = b""
@@ -120,9 +129,14 @@ def process_realtime_audio():
                                 elif current_time - state["silence_start"] >= SILENCE_DURATION_S:
                                     logger.info(f"Session {session_id}: Auto-triggering response after {current_time - state["silence_start"]:.1f}s of silence")
                                     
+                                    # --- Start Transcription Process ---
+                                    trigger_time = time.time()
+                                    
                                     # Trigger transcription
                                     audio_bytes = session_buffers[session_id]
                                     transcription = transcribe_audio_bytes(audio_bytes)
+                                    
+                                    stt_latency_ms = (time.time() - trigger_time) * 1000
                                     
                                     if transcription:
                                         # Send transcription to client
@@ -131,13 +145,17 @@ def process_realtime_audio():
                                             "text": transcription
                                         }))
                                         
-                                        # Send to LLM worker
+                                        # Send to LLM worker with latency tracking
                                         llm_payload = {
                                             "session_id": session_id,
                                             "text_input": transcription,
+                                            "metrics": {
+                                                "trigger_time": trigger_time,
+                                                "stt_latency_ms": stt_latency_ms
+                                            }
                                         }
                                         r.publish("realtime_llm", json.dumps(llm_payload))
-                                        logger.info(f"Auto-transcription sent for session {session_id}")
+                                        logger.info(f"Auto-transcription sent for session {session_id} (Latency: {stt_latency_ms:.2f}ms)")
                                     
                                     # Reset buffer AND session state for next turn
                                     session_buffers[session_id] = b""

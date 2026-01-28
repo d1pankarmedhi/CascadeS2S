@@ -27,9 +27,8 @@ RUN if [ "$DEVICE" = "gpu" ]; then \
     fi && \
     uv pip install --system --no-cache-dir -r requirements.txt
 
-# Download the Qwen3-TTS model during the build process
-# We do this in the builder stage to keep the final image clean
-RUN python -c "from qwen_tts import Qwen3TTSModel; Qwen3TTSModel.from_pretrained('Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice')"
+# Download the Pocket TTS model during the build process
+RUN python -c "from pocket_tts import TTSModel; TTSModel.load_model()"
 
 # Stage 2: The Final Application Stage
 FROM python:3.10-slim

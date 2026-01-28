@@ -8,7 +8,6 @@ import threading
 import redis
 import soundfile as sf
 import torch
-from qwen_tts import Qwen3TTSModel
 from logger import setup_logger
 
 logger = setup_logger("tts_worker")
@@ -22,30 +21,32 @@ except redis.exceptions.ConnectionError as e:
     logger.error(f"TTS Worker could not connect to Redis: {e}")
     r = None
 
-# --- Qwen3-TTS Model Setup ---
-# Set device to GPU if available, otherwise use CPU
-device = "cuda:0" if torch.cuda.is_available() else "cpu"
+# --- Pocket TTS Model Setup ---
+# Set device (defaulting to CPU for Pocket TTS as per docs, but can use CUDA if needed)
+device = "cuda" if torch.cuda.is_available() else "cpu"
 logger.info(f"Using device: {device}")
 
 try:
-    # Load the Qwen3-TTS 0.6B-CustomVoice model
-    # Note: dtype and attn_implementation can be adjusted based on GPU capabilities
-    model = Qwen3TTSModel.from_pretrained(
-        "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice",
-        device_map=device,
-        dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float32,
-        # Use flash_attention_2 if supported and enabled in requirements
-        # attn_implementation="flash_attention_2" if torch.cuda.is_available() else "eager"
-    )
-    logger.info("Qwen3-TTS 0.6B-CustomVoice model loaded successfully!")
+    from pocket_tts import TTSModel
+    import scipy.io.wavfile
+
+    # Load the Pocket TTS model
+    model = TTSModel.load_model()
+    
+    # Pre-load voice state for "alba" to minimize latency
+    logger.info("Pre-loading voice state for 'alba'...")
+    voice_state = model.get_state_for_audio_prompt("alba")
+    
+    logger.info("Pocket TTS model and voice state loaded successfully!")
 except Exception as e:
     model = None
-    logger.error(f"Error loading Qwen3-TTS model: {e}")
+    voice_state = None
+    logger.error(f"Error loading Pocket TTS model: {e}")
 
 
 def synthesize_speech(text: str, output_path: str) -> bool:
     """
-    Synthesize speech from text and save to file using Qwen3-TTS CustomVoice.
+    Synthesize speech from text and save to file using Pocket TTS.
     
     Args:
         text: Text to synthesize
@@ -54,28 +55,22 @@ def synthesize_speech(text: str, output_path: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    if not model:
-        logger.error("TTS model not loaded")
+    if not model or not voice_state:
+        logger.error("TTS model or voice state not loaded")
         return False
     
     try:
-        # Generate audio using Qwen3-TTS CustomVoice
-        # Using default speaker "Vivian"
-        wavs, sr = model.generate_custom_voice(
-            text=text,
-            language="Auto",
-            speaker="Vivian",
-            instruct="", # Can be used for emotive speech
-        )
+        # Generate audio using Pocket TTS
+        audio = model.generate_audio(voice_state, text)
         
-        # Save audio file
+        # Save audio file using scipy as recommended
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        sf.write(output_path, wavs[0], sr)
+        scipy.io.wavfile.write(output_path, model.sample_rate, audio.numpy())
         
         return True
         
     except Exception as e:
-        logger.error(f"Error synthesizing speech with Qwen3-TTS: {e}")
+        logger.error(f"Error synthesizing speech with Pocket TTS: {e}")
         return False
 
 
@@ -103,6 +98,9 @@ def process_realtime_requests():
                     if not session_id or not text_to_speech:
                         continue
                     
+                    metrics = data.get("metrics", {})
+                    trigger_time = metrics.get("trigger_time", time.time())
+                    
                     logger.info(f"Processing real-time TTS for session {session_id} ({len(text_to_speech)} chars)")
                     
                     # Generate unique filename
@@ -111,16 +109,28 @@ def process_realtime_requests():
                     # Synthesize speech
                     start_time = time.time()
                     success = synthesize_speech(text_to_speech, audio_filename)
-                    latency = (time.time() - start_time) * 1000
+                    tts_latency_ms = (time.time() - start_time) * 1000
                     
                     if success:
+                        # Finalize pipeline metrics
+                        now = time.time()
+                        pipeline_latency_ms = (now - trigger_time) * 1000
+                        metrics["tts_latency_ms"] = tts_latency_ms
+                        metrics["pipeline_latency_ms"] = pipeline_latency_ms
+                        
                         # Send audio path to API via pubsub
                         r.publish(f"response:{session_id}", json.dumps({
                             "type": "audio",
                             "audio_path": audio_filename
                         }))
                         
-                        logger.info(f"TTS audio generated for session {session_id} in {latency:.0f}ms")
+                        # Send final latency report
+                        r.publish(f"response:{session_id}", json.dumps({
+                            "type": "latency_report",
+                            "metrics": metrics
+                        }))
+                        
+                        logger.info(f"TTS audio generated for session {session_id} in {tts_latency_ms:.0f}ms. Total pipeline: {pipeline_latency_ms:.0f}ms")
                     else:
                         logger.error(f"Failed to generate TTS for session {session_id}")
                     
@@ -152,11 +162,11 @@ def process_batch_jobs():
 
             logger.info(f"TTS Worker processing batch job {job_id}")
 
-            if not model or not tokenizer:
+            if not model or not voice_state:
                 error_payload = {
                     "job_id": job_id,
                     "status": "failed",
-                    "error": "TTS model not loaded.",
+                    "error": "TTS model or voice state not loaded.",
                 }
                 r.set(f"result:{job_id}", json.dumps(error_payload))
                 continue
