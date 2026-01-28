@@ -296,6 +296,36 @@ audio {
     opacity: 0.6;
 }
 
+
+/* Latency Metrics */
+.latency-metrics {
+    margin-top: 1rem;
+    padding: 0.75rem;
+    background-color: var(--bg-secondary);
+    border-radius: 8px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-family: 'Courier New', Courier, monospace;
+    line-height: 1.4;
+    border: 1px dashed var(--border-light);
+}
+
+.latency-row {
+    margin-bottom: 2px;
+}
+
+.latency-row.total {
+    margin-top: 6px;
+    padding-top: 4px;
+    border-top: 1px solid var(--border-light);
+    font-weight: 600;
+}
+
+.latency-row.e2e {
+    font-weight: 600;
+    color: var(--accent);
+}
+
 @media (max-width: 600px) {
     .action-bar-content {
         min-width: 90%;

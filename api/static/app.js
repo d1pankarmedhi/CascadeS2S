@@ -59,10 +59,10 @@ function connectWebSocket() {
                 lastAssistantMessage = null;
             } else if (data.type === 'llm_response') {
                 lastAssistantMessage = addTranscriptMessage('assistant', data.text);
-            } else if (data.type === 'status') {
-                console.log('Status update:', data.message);
-                if (data.message === 'processing') {
-                    updateStatus('processing', 'Processing...');
+            } else if (data.type === 'latency_report') {
+                console.log('Latency report received:', data.metrics);
+                if (lastAssistantMessage) {
+                    appendLatencyMetrics(lastAssistantMessage, data.metrics);
                 }
             } else if (data.type === 'error') {
                 console.error('Server error:', data.message);
@@ -241,6 +241,30 @@ function appendAudioPlayer(container, audioUrl) {
     container.appendChild(playerContainer);
 
     // Scroll to bottom after adding player
+    transcript.scrollTop = transcript.scrollHeight;
+}
+
+function appendLatencyMetrics(container, metrics) {
+    const latencyDiv = document.createElement('div');
+    latencyDiv.className = 'latency-metrics';
+
+    // Calculate Client E2E (from server trigger to now)
+    const now = Date.now() / 1000;
+    const clientE2E = (now - metrics.trigger_time) * 1000;
+
+    const format = (ms) => `${ms.toFixed(2)}ms (${(ms / 1000).toFixed(1)}s)`;
+
+    latencyDiv.innerHTML = `
+        <div class="latency-row">STT Latency: ${format(metrics.stt_latency_ms)}</div>
+        <div class="latency-row">LLM Latency: ${format(metrics.llm_latency_ms)}</div>
+        <div class="latency-row">TTS Latency: ${format(metrics.tts_latency_ms)}</div>
+        <div class="latency-row total">Total Pipeline Latency: ${format(metrics.pipeline_latency_ms)}</div>
+        <div class="latency-row e2e">Client End-to-End Latency: ${format(clientE2E)}</div>
+    `;
+
+    container.appendChild(latencyDiv);
+
+    // Scroll to bottom
     transcript.scrollTop = transcript.scrollHeight;
 }
 
