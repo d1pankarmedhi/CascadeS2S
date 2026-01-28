@@ -11,7 +11,7 @@
 
 ## 🌟 Key Features
 
-- **Real-Time Voice**: Dual-mode (Streaming & Batch) conversation with < 2s latency.
+- **Real-Time Voice**: Dual-mode (Streaming & Batch) conversation with < 5s latency.
 - **Optimized Stack**: `faster-whisper` for STT, `Qwen 2.5` (via Ollama) for LLM, and `Pocket TTS` for speech.
 - **Smart Architecture**: Sentence-level streaming and voice state pre-loading for maximum speed.
 - **Premium UI**: Modern dark mode interface with real-time transcription and latency metrics.
