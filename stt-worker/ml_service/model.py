@@ -5,10 +5,6 @@ from logger import setup_logger
 
 logger = setup_logger("stt_model")
 
-# Initialize faster-whisper model (using tiny for speed, can be changed to base/small)
-# Model sizes: tiny, base, small, medium, large-v2, large-v3
-# tiny: ~75MB, very fast, good accuracy for real-time
-# base: ~142MB, faster, better accuracy
 model = None
 
 try:

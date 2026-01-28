@@ -12,7 +12,7 @@ from logger import setup_logger
 
 logger = setup_logger("tts_worker")
 
-# --- Set up Redis connection ---
+# Set up Redis connection
 try:
     r = redis.Redis(host="redis", port=6379, db=0)
     r.ping()
@@ -21,7 +21,7 @@ except redis.exceptions.ConnectionError as e:
     logger.error(f"TTS Worker could not connect to Redis: {e}")
     r = None
 
-# --- Pocket TTS Model Setup ---
+# Pocket TTS Model Setup
 # Set device (defaulting to CPU for Pocket TTS as per docs, but can use CUDA if needed)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 logger.info(f"Using device: {device}")
