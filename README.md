@@ -33,17 +33,6 @@ Use the provided script for easier control:
 - `logs`: Follow container logs.
 - `clean`: Reset the environment.
 
-## 🧪 Testing
-
-Test the API directly using our CLI tool (requires `ffmpeg`):
-
-```bash
-# Real-time streaming test
-./.venv/bin/python3 test_endpoints.py --mode stream
-
-# Batch processing test
-./.venv/bin/python3 test_endpoints.py --mode batch
-```
 
 ## 🏗️ Architecture
 
