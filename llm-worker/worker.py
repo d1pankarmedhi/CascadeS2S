@@ -13,7 +13,7 @@ load_dotenv()
 
 # Configuration
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
-MODEL_NAME = "qwen2.5:1.5b"
+MODEL_NAME = "qwen2.5:0.5b"
 logger = setup_logger("llm_worker")
 
 # State
@@ -57,31 +57,11 @@ def ensure_model_pulled():
             logger.error(f"Failed to check/pull model {MODEL_NAME}: {e}. Retrying in 30s...")
             time.sleep(30)
 
-def generate_response(text_input: str) -> str:
-    """
-    Generates a response using local Ollama (Qwen 2.5).
-    Optimized for conversational, real-time responses.
-    """
-    if not model_ready:
-        logger.warning(f"Model {MODEL_NAME} is not ready yet.")
-        return "Please wait a moment, I am still preparing my thoughts (local model is loading)."
-
-    try:
-        # We use a system prompt to keep responses concise for voice output
-        response = client.chat(model=MODEL_NAME, messages=[
-            {'role': 'system', 'content': 'You are a helpful voice assistant. Give concise, natural responses as if in a spoken conversation in English. Keep responses brief (1-3 sentences).'},
-            {'role': 'user', 'content': text_input},
-        ])
-        return response['message']['content']
-    except Exception as e:
-        logger.error(f"Ollama API call failed: {e}")
-        return "I'm sorry, I'm having trouble thinking right now."
-
 
 def process_realtime_requests():
     """
     Listens for real-time LLM requests via Redis pubsub.
-    Processes text and sends responses back.
+    Processes text and sends responses back with streaming.
     """
     if not r:
         logger.error("Cannot start real-time processor - no Redis connection")
@@ -102,35 +82,89 @@ def process_realtime_requests():
                     if not session_id or not text_input:
                         continue
                     
+                    if not model_ready:
+                        logger.warning(f"Model {MODEL_NAME} is not ready yet.")
+                        r.publish(f"response:{session_id}", json.dumps({
+                            "type": "llm_response",
+                            "text": "Please wait a moment, I am still preparing my thoughts.",
+                            "is_final": True
+                        }))
+                        continue
+
                     metrics = data.get("metrics", {})
                     trigger_time = metrics.get("trigger_time", time.time())
                     
                     logger.info(f"Processing real-time request for session {session_id} ({len(text_input)} chars)")
                     
-                    # Generate LLM response
                     start_time = time.time()
-                    llm_response = generate_response(text_input)
-                    llm_latency_ms = (time.time() - start_time) * 1000
+                    full_response = ""
+                    sentence_buffer = ""
+                    sentence_delimiters = {'.', '?', '!', '\n'}
                     
-                    # Send response to client
+                    # Notify client that we're starting
                     r.publish(f"response:{session_id}", json.dumps({
                         "type": "llm_response",
-                        "text": llm_response
+                        "text": "",
+                        "is_final": False
                     }))
-                    
-                    # Send to TTS worker (only if model was ready, otherwise it's just a status text)
-                    if model_ready:
-                        # Update metrics for TTS
-                        metrics["llm_latency_ms"] = llm_latency_ms
+
+                    # Stream from Ollama
+                    stream = client.chat(
+                        model=MODEL_NAME,
+                        messages=[
+                            {'role': 'system', 'content': 'You are a helpful voice assistant. Give concise, natural responses as if in a spoken conversation in English. Keep responses brief (1-3 sentences).'},
+                            {'role': 'user', 'content': text_input},
+                        ],
+                        stream=True,
+                    )
+
+                    for chunk in stream:
+                        content = chunk['message']['content']
+                        full_response += content
+                        sentence_buffer += content
                         
-                        tts_payload = {
+                        # Send partial text update to client
+                        r.publish(f"response:{session_id}", json.dumps({
+                            "type": "llm_response",
+                            "text": full_response,
+                            "is_final": False
+                        }))
+                        
+                        # Check for sentence boundaries to stream to TTS
+                        if any(delim in sentence_buffer for delim in sentence_delimiters):
+                            for delim in sentence_delimiters:
+                                if delim in sentence_buffer:
+                                    parts = sentence_buffer.split(delim)
+                                    for i in range(len(parts) - 1):
+                                        completed_sentence = parts[i] + delim
+                                        if completed_sentence.strip():
+                                            r.publish("realtime_tts", json.dumps({
+                                                "session_id": session_id,
+                                                "text_to_speech": completed_sentence.strip(),
+                                                "metrics": {**metrics, "llm_latency_ms": (time.time() - start_time) * 1000},
+                                                "is_final": False # Not final yet
+                                            }))
+                                    
+                                    sentence_buffer = parts[-1]
+                                    break
+
+                    # Final cleanup of remaining text
+                    if sentence_buffer.strip():
+                        r.publish("realtime_tts", json.dumps({
                             "session_id": session_id,
-                            "text_to_speech": llm_response,
-                            "metrics": metrics
-                        }
-                        r.publish("realtime_tts", json.dumps(tts_payload))
+                            "text_to_speech": sentence_buffer.strip(),
+                            "metrics": {**metrics, "llm_latency_ms": (time.time() - start_time) * 1000},
+                            "is_final": True # This is the last one
+                        }))
                     
-                    logger.info(f"LLM response sent for session {session_id} (Latency: {llm_latency_ms:.2f}ms): {llm_response[:50]}...")
+                    # Send final result to client
+                    r.publish(f"response:{session_id}", json.dumps({
+                        "type": "llm_response",
+                        "text": full_response,
+                        "is_final": True
+                    }))
+
+                    logger.info(f"LLM streaming completed for session {session_id} (Total Latency: {(time.time() - start_time)*1000:.2f}ms)")
                     
                 except Exception as e:
                     logger.error(f"Error processing real-time LLM request: {e}")

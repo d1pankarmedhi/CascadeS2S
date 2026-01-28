@@ -127,7 +127,8 @@ def process_realtime_requests():
                         # Send final latency report
                         r.publish(f"response:{session_id}", json.dumps({
                             "type": "latency_report",
-                            "metrics": metrics
+                            "metrics": metrics,
+                            "is_final": data.get("is_final", True)
                         }))
                         
                         logger.info(f"TTS audio generated for session {session_id} in {tts_latency_ms:.0f}ms. Total pipeline: {pipeline_latency_ms:.0f}ms")
