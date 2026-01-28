@@ -94,6 +94,8 @@ async def websocket_voice_endpoint(websocket: WebSocket):
                         await websocket.send_json(data)
                     elif data.get('type') == 'llm_response':
                         await websocket.send_json(data)
+                    elif data.get('type') == 'latency_report':
+                        await websocket.send_json(data)
                     elif data.get('type') == 'audio':
                         # Send binary audio data
                         audio_path = data.get('audio_path')

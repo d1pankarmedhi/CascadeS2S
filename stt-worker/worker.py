@@ -3,14 +3,13 @@ import os
 import time
 import traceback
 import threading
-
 import redis
 from logger import setup_logger
 from ml_service.model import transcribe_audio_file, transcribe_audio_bytes
 
 logger = setup_logger("stt_worker")
 
-# --- Set up Redis connection ---
+# Set up Redis connection 
 try:
     r = redis.Redis(host="redis", port=6379, db=0)
     r.ping()
@@ -50,8 +49,13 @@ def process_realtime_audio():
                             
                             logger.info(f"Processing end of stream for session {session_id}")
                             
+                            # Start Transcription Process 
+                            trigger_time = time.time()
+                            
                             # Transcribe accumulated audio
                             transcription = transcribe_audio_bytes(audio_bytes)
+                            
+                            stt_latency_ms = (time.time() - trigger_time) * 1000
                             
                             if transcription:
                                 # Send transcription to client
@@ -60,14 +64,18 @@ def process_realtime_audio():
                                     "text": transcription
                                 }))
                                 
-                                # Send to LLM worker
+                                # Send to LLM worker with latency tracking
                                 llm_payload = {
                                     "session_id": session_id,
                                     "text_input": transcription,
+                                    "metrics": {
+                                        "trigger_time": trigger_time,
+                                        "stt_latency_ms": stt_latency_ms
+                                    }
                                 }
                                 r.publish("realtime_llm", json.dumps(llm_payload))
                                 
-                                logger.info(f"Transcription sent for session {session_id}: {transcription[:50]}...")
+                                logger.info(f"Transcription sent for session {session_id} (Latency: {stt_latency_ms:.2f}ms): {transcription[:50]}...")
                             
                             # Clear buffer
                             session_buffers[session_id] = b""
@@ -86,10 +94,77 @@ def process_realtime_audio():
                             # Append to buffer
                             session_buffers[session_id] += audio_chunk
                             
+                            # Automatic Turn-Taking (Silence Detection) 
+                            # Constants for silence detection
+                            SILENCE_THRESHOLD = 0.01  # RMS energy below this is "silence"
+                            SILENCE_DURATION_S = 0.8  # Required silence duration to trigger response
+                            SPEECH_THRESHOLD = 0.02   # RMS energy above this is "speech"
+                            
+                            # Get energy of the current chunk
+                            from ml_service.model import calculate_energy
+                            energy = calculate_energy(audio_chunk)
+                            
+                            # Initialize session state if needed
+                            if f"{session_id}_state" not in session_buffers:
+                                session_buffers[f"{session_id}_state"] = {
+                                    "is_speaking": False,
+                                    "silence_start": None,
+                                    "last_energy": energy
+                                }
+                            
+                            state = session_buffers[f"{session_id}_state"]
+                            
+                            current_time = time.time()
+                            
+                            if energy > SPEECH_THRESHOLD:
+                                if not state["is_speaking"]:
+                                    logger.info(f"Session {session_id}: Speech detected (energy: {energy:.4f})")
+                                state["is_speaking"] = True
+                                state["silence_start"] = None
+                            elif energy < SILENCE_THRESHOLD and state["is_speaking"]:
+                                if state["silence_start"] is None:
+                                    state["silence_start"] = current_time
+                                    logger.info(f"Session {session_id}: Silence started...")
+                                elif current_time - state["silence_start"] >= SILENCE_DURATION_S:
+                                    logger.info(f"Session {session_id}: Auto-triggering response after {current_time - state["silence_start"]:.1f}s of silence")
+                                    
+                                    # Start Transcription Process 
+                                    trigger_time = time.time()
+                                    
+                                    # Trigger transcription
+                                    audio_bytes = session_buffers[session_id]
+                                    transcription = transcribe_audio_bytes(audio_bytes)
+                                    
+                                    stt_latency_ms = (time.time() - trigger_time) * 1000
+                                    
+                                    if transcription:
+                                        # Send transcription to client
+                                        r.publish(f"response:{session_id}", json.dumps({
+                                            "type": "transcription",
+                                            "text": transcription
+                                        }))
+                                        
+                                        # Send to LLM worker with latency tracking
+                                        llm_payload = {
+                                            "session_id": session_id,
+                                            "text_input": transcription,
+                                            "metrics": {
+                                                "trigger_time": trigger_time,
+                                                "stt_latency_ms": stt_latency_ms
+                                            }
+                                        }
+                                        r.publish("realtime_llm", json.dumps(llm_payload))
+                                        logger.info(f"Auto-transcription sent for session {session_id} (Latency: {stt_latency_ms:.2f}ms)")
+                                    
+                                    # Reset buffer AND session state for next turn
+                                    session_buffers[session_id] = b""
+                                    state["is_speaking"] = False
+                                    state["silence_start"] = None
+                            
                             # Log progress (every 10 chunks)
                             chunk_count = len(session_buffers[session_id]) // 8192 # Approximate
                             if chunk_count > 0 and chunk_count % 10 == 0:
-                                logger.info(f"Session {session_id}: Buffer size {len(session_buffers[session_id])} bytes (~{len(session_buffers[session_id])/32000:.1f}s)")
+                                logger.info(f"Session {session_id}: Buffer size {len(session_buffers[session_id])} bytes (~{len(session_buffers[session_id])/32000:.1f}s, energy: {energy:.4f})")
                             
                 except Exception as e:
                     logger.error(f"Error processing real-time audio: {e}")

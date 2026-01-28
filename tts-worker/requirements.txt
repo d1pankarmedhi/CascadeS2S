@@ -1,5 +1,6 @@
 redis>=6.4.0
-qwen-tts
+pocket-tts
+scipy
 soundfile
 torch
 torchaudio

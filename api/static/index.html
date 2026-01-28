@@ -12,82 +12,61 @@
 </head>
 
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🎙️ CascadeS2S</h1>
-            <p class="subtitle">Real-Time Voice Agent</p>
-        </div>
+    <div class="app-container">
+        <header class="header">
+            <h1>CascadeS2S</h1>
+            <p class="subtitle">AI Voice Assistant</p>
+        </header>
 
-        <div class="main-card">
-            <div class="status-indicator" id="statusIndicator">
-                <div class="status-icon" id="statusIcon">
-                    <svg class="icon" id="micIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2">
-                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
-                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-                        <line x1="12" y1="19" x2="12" y2="23"></line>
-                        <line x1="8" y1="23" x2="16" y2="23"></line>
-                    </svg>
-                    <svg class="icon hidden" id="processingIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <path d="M12 6v6l4 2"></path>
-                    </svg>
-                    <svg class="icon hidden" id="speakingIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                        stroke-width="2">
-                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
-                    </svg>
+        <main class="chat-container" id="transcript">
+            <div class="placeholder">How can I help you today?</div>
+        </main>
+
+        <footer class="action-bar">
+            <div class="action-bar-content" id="connectionStatus">
+                <div class="status-indicator">
+                    <div class="status-dot"></div>
+                    <span class="status-text" id="statusText">Disconnected</span>
                 </div>
-                <p class="status-text" id="statusText">Ready to start</p>
-            </div>
 
-            <div class="controls">
-                <button class="btn-primary" id="startBtn">
-                    <span>Start Conversation</span>
-                </button>
-                <button class="btn-secondary hidden" id="stopBtn">
-                    <span>Stop</span>
-                </button>
-            </div>
-
-            <div class="connection-status" id="connectionStatus">
-                <div class="status-dot"></div>
-                <span>Disconnected</span>
-            </div>
-
-            <div class="transcript-container">
-                <div class="transcript-header">
-                    <h3>Conversation</h3>
+                <div class="controls">
+                    <button class="btn-primary" id="startBtn">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                            <line x1="12" y1="19" x2="12" y2="23"></line>
+                        </svg>
+                        Start
+                    </button>
+                    <button class="btn-secondary hidden" id="stopBtn">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="6" y="6" width="12" height="12"></rect>
+                        </svg>
+                        Stop
+                    </button>
                     <button class="btn-clear" id="clearBtn">Clear</button>
                 </div>
-                <div class="transcript" id="transcript">
-                    <p class="placeholder">Your conversation will appear here...</p>
-                </div>
             </div>
-        </div>
-
-        <div class="info-card">
-            <h3>How it works</h3>
-            <div class="info-steps">
-                <div class="step">
-                    <span class="step-number">1</span>
-                    <p>Click "Start Conversation" and grant microphone access</p>
-                </div>
-                <div class="step">
-                    <span class="step-number">2</span>
-                    <p>Speak naturally - your voice is processed in real-time</p>
-                </div>
-                <div class="step">
-                    <span class="step-number">3</span>
-                    <p>Listen to the AI's response automatically</p>
-                </div>
-            </div>
-        </div>
+        </footer>
     </div>
 
-    <script src="/static/app.js?v=2"></script>
+    <!-- Icons for status updates (hidden, used by JS) -->
+    <div class="hidden">
+        <svg id="micIcon">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+        </svg>
+        <svg id="processingIcon">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M12 6v6l4 2"></path>
+        </svg>
+        <svg id="speakingIcon">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+        </svg>
+        <div id="statusIcon"></div> <!-- Dummy for JS -->
+    </div>
+
+    <script src="/static/app.js?v=4"></script>
 </body>
 
 </html>

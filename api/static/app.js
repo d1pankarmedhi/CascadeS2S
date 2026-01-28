@@ -5,6 +5,7 @@ let audioSource = null;
 let audioProcessor = null;
 let audioStream = null;
 let isRecording = false;
+let lastAssistantMessage = null;
 
 // DOM Elements
 const startBtn = document.getElementById('startBtn');
@@ -17,6 +18,32 @@ const speakingIcon = document.getElementById('speakingIcon');
 const connectionStatus = document.getElementById('connectionStatus');
 const transcript = document.getElementById('transcript');
 const clearBtn = document.getElementById('clearBtn');
+
+// Audio Queue for sequential playback
+const audioQueue = [];
+let isPlaying = false;
+
+async function processAudioQueue() {
+    if (isPlaying || audioQueue.length === 0) return;
+
+    isPlaying = true;
+    while (audioQueue.length > 0) {
+        const audioUrl = audioQueue.shift();
+        try {
+            await playAudioResponse(audioUrl);
+        } catch (error) {
+            console.error('Playback error:', error);
+        }
+    }
+    isPlaying = false;
+
+    // After playing all audio, go back to listening if still recording
+    if (isRecording) {
+        updateStatus('listening', 'Listening...');
+    } else if (!isRecording && audioQueue.length === 0) {
+        updateStatus('ready', 'Ready to start');
+    }
+}
 
 // WebSocket Connection
 function connectWebSocket() {
@@ -37,26 +64,47 @@ function connectWebSocket() {
         if (event.data instanceof Blob) {
             // Received audio blob from TTS
             updateStatus('speaking', 'Speaking...');
-            await playAudioResponse(event.data);
+            const audioUrl = URL.createObjectURL(event.data);
 
-            // After playing audio, go back to listening
-            if (isRecording) {
-                updateStatus('listening', 'Listening...');
-            } else {
-                updateStatus('ready', 'Ready to start');
+            // Re-enable audio player UI
+            if (lastAssistantMessage) {
+                let audioContainer = lastAssistantMessage.querySelector('.audio-players-container');
+                if (!audioContainer) {
+                    audioContainer = document.createElement('div');
+                    audioContainer.className = 'audio-players-container';
+                    lastAssistantMessage.appendChild(audioContainer);
+                }
+                appendAudioPlayer(audioContainer, audioUrl);
             }
+
+            // Add to playback queue
+            audioQueue.push(audioUrl);
+            processAudioQueue();
         } else {
             // Text message (transcription or status update)
             const data = JSON.parse(event.data);
 
             if (data.type === 'transcription') {
                 addTranscriptMessage('user', data.text);
+                lastAssistantMessage = null;
             } else if (data.type === 'llm_response') {
-                addTranscriptMessage('assistant', data.text);
-            } else if (data.type === 'status') {
-                console.log('Status update:', data.message);
-                if (data.message === 'processing') {
-                    updateStatus('processing', 'Processing...');
+                // Handle partial or final LLM response
+                if (!lastAssistantMessage) {
+                    lastAssistantMessage = addTranscriptMessage('assistant', data.text);
+                } else {
+                    // Update existing message text
+                    const textElement = lastAssistantMessage.querySelector('.message-text');
+                    textElement.textContent = data.text;
+                    transcript.scrollTop = transcript.scrollHeight;
+                }
+
+                if (data.is_final) {
+                    // LLM done, but audio might still be playing
+                }
+            } else if (data.type === 'latency_report') {
+                console.log('Latency report received:', data.metrics);
+                if (lastAssistantMessage) {
+                    appendLatencyMetrics(lastAssistantMessage, data.metrics, data.is_final);
                 }
             } else if (data.type === 'error') {
                 console.error('Server error:', data.message);
@@ -192,19 +240,16 @@ function stopRecording() {
 }
 
 // Audio Playback for Responses
-async function playAudioResponse(audioBlob) {
+async function playAudioResponse(audioUrl) {
     return new Promise((resolve, reject) => {
-        const audioUrl = URL.createObjectURL(audioBlob);
         const audio = new Audio(audioUrl);
 
         audio.onended = () => {
-            URL.revokeObjectURL(audioUrl);
             resolve();
         };
 
         audio.onerror = (error) => {
             console.error('Error playing audio:', error);
-            URL.revokeObjectURL(audioUrl);
             reject(error);
         };
 
@@ -212,39 +257,83 @@ async function playAudioResponse(audioBlob) {
     });
 }
 
+function appendAudioPlayer(container, audioUrl) {
+    const playerContainer = document.createElement('div');
+    playerContainer.className = 'audio-player-container';
+
+    const audio = document.createElement('audio');
+    audio.controls = true;
+    audio.src = audioUrl;
+
+    const downloadLink = document.createElement('a');
+    downloadLink.href = audioUrl;
+    downloadLink.download = `response_${Date.now()}.wav`;
+    downloadLink.className = 'download-link';
+    downloadLink.title = 'Download Audio';
+    downloadLink.innerHTML = `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+    `;
+
+    playerContainer.appendChild(audio);
+    playerContainer.appendChild(downloadLink);
+    container.appendChild(playerContainer);
+
+    // Scroll to bottom after adding player
+    transcript.scrollTop = transcript.scrollHeight;
+}
+
+function appendLatencyMetrics(container, metrics, isFinal = false) {
+    // Look for ANY latency-metrics block within this container
+    let latencyDiv = container.querySelector('.latency-metrics');
+    const isUpdate = !!latencyDiv;
+
+    if (!latencyDiv) {
+        latencyDiv = document.createElement('div');
+        latencyDiv.className = 'latency-metrics';
+        container.appendChild(latencyDiv);
+    }
+
+    // Calculate Client E2E (from server trigger to now)
+    const now = Date.now() / 1000;
+    const clientE2E = (now - metrics.trigger_time) * 1000;
+
+    const format = (ms) => `${ms.toFixed(2)}ms (${(ms / 1000).toFixed(1)}s)`;
+
+    latencyDiv.innerHTML = `
+        <div class="latency-row">STT Latency: ${format(metrics.stt_latency_ms)}</div>
+        <div class="latency-row">LLM Latency: ${format(metrics.llm_latency_ms)}</div>
+        <div class="latency-row">TTS Latency: ${format(metrics.tts_latency_ms)}</div>
+        <div class="latency-row total">Total Pipeline Latency: ${format(metrics.pipeline_latency_ms)}</div>
+        <div class="latency-row e2e">Client End-to-End Latency: ${format(clientE2E)}</div>
+        ${isFinal ? '<div class="latency-row final" style="color: var(--accent); font-weight: bold; margin-top: 4px;">Final Report</div>' : ''}
+    `;
+
+    // Scroll to bottom only if it's new
+    if (!isUpdate) {
+        transcript.scrollTop = transcript.scrollHeight;
+    }
+}
+
 // UI Updates
 function updateStatus(state, text) {
     statusText.textContent = text;
-    statusIcon.className = 'status-icon ' + state;
+    // statusIcon and specific icons are now handled more minimally or hidden
+    console.log(`Status changed to: ${state} (${text})`);
 
-    // Hide all icons
-    micIcon.classList.add('hidden');
-    processingIcon.classList.add('hidden');
-    speakingIcon.classList.add('hidden');
-
-    // Show appropriate icon
-    switch (state) {
-        case 'listening':
-            micIcon.classList.remove('hidden');
-            break;
-        case 'processing':
-            processingIcon.classList.remove('hidden');
-            break;
-        case 'speaking':
-            speakingIcon.classList.remove('hidden');
-            break;
-        default:
-            micIcon.classList.remove('hidden');
-    }
+    // We could add visual feedback to the action bar here if needed
 }
 
 function updateConnectionStatus(connected) {
     if (connected) {
         connectionStatus.classList.add('connected');
-        connectionStatus.querySelector('span').textContent = 'Connected';
+        statusText.textContent = 'Connected';
     } else {
         connectionStatus.classList.remove('connected');
-        connectionStatus.querySelector('span').textContent = 'Disconnected';
+        statusText.textContent = 'Disconnected';
     }
 }
 
@@ -271,11 +360,17 @@ function addTranscriptMessage(role, text) {
     transcript.appendChild(messageDiv);
 
     // Scroll to bottom
-    transcript.scrollTop = transcript.scrollHeight;
+    transcript.scrollTo({
+        top: transcript.scrollHeight,
+        behavior: 'smooth'
+    });
+
+    return messageDiv;
 }
 
 function clearTranscript() {
-    transcript.innerHTML = '<p class="placeholder">Your conversation will appear here...</p>';
+    transcript.innerHTML = '<div class="placeholder">How can I help you today?</div>';
+    lastAssistantMessage = null;
 }
 
 // Event Listeners
