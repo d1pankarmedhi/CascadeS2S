@@ -118,3 +118,36 @@ def transcribe_audio_bytes(audio_bytes: bytes) -> str:
         import traceback
         logger.error(traceback.format_exc())
         return ""
+
+def calculate_energy(audio_bytes: bytes) -> float:
+    """
+    Calculate the RMS energy of raw Int16 PCM audio bytes.
+    Used for simple silence detection.
+    
+    Args:
+        audio_bytes: Raw PCM audio data (Int16, 16kHz, Mono)
+        
+    Returns:
+        RMS energy value (0.0 to 1.0)
+    """
+    if not audio_bytes:
+        return 0.0
+    
+    try:
+        # Convert raw bytes to numpy array (Int16)
+        num_samples = len(audio_bytes) // 2
+        samples_int16 = np.frombuffer(audio_bytes[:num_samples*2], dtype=np.int16)
+        
+        if len(samples_int16) == 0:
+            return 0.0
+            
+        # Convert to Float32 [-1, 1]
+        samples = samples_int16.astype(np.float32) / 32768.0
+        
+        # Calculate RMS energy
+        rms = np.sqrt(np.mean(samples**2))
+        return float(rms)
+        
+    except Exception as e:
+        logger.error(f"Error calculating energy: {e}")
+        return 0.0

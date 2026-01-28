@@ -86,10 +86,68 @@ def process_realtime_audio():
                             # Append to buffer
                             session_buffers[session_id] += audio_chunk
                             
+                            # --- Automatic Turn-Taking (Silence Detection) ---
+                            # Constants for silence detection
+                            SILENCE_THRESHOLD = 0.01  # RMS energy below this is "silence"
+                            SILENCE_DURATION_S = 0.8  # Required silence duration to trigger response
+                            SPEECH_THRESHOLD = 0.02   # RMS energy above this is "speech"
+                            
+                            # Get energy of the current chunk
+                            from ml_service.model import calculate_energy
+                            energy = calculate_energy(audio_chunk)
+                            
+                            # Initialize session state if needed
+                            if f"{session_id}_state" not in session_buffers:
+                                session_buffers[f"{session_id}_state"] = {
+                                    "is_speaking": False,
+                                    "silence_start": None,
+                                    "last_energy": energy
+                                }
+                            
+                            state = session_buffers[f"{session_id}_state"]
+                            
+                            current_time = time.time()
+                            
+                            if energy > SPEECH_THRESHOLD:
+                                if not state["is_speaking"]:
+                                    logger.info(f"Session {session_id}: Speech detected (energy: {energy:.4f})")
+                                state["is_speaking"] = True
+                                state["silence_start"] = None
+                            elif energy < SILENCE_THRESHOLD and state["is_speaking"]:
+                                if state["silence_start"] is None:
+                                    state["silence_start"] = current_time
+                                    logger.info(f"Session {session_id}: Silence started...")
+                                elif current_time - state["silence_start"] >= SILENCE_DURATION_S:
+                                    logger.info(f"Session {session_id}: Auto-triggering response after {current_time - state["silence_start"]:.1f}s of silence")
+                                    
+                                    # Trigger transcription
+                                    audio_bytes = session_buffers[session_id]
+                                    transcription = transcribe_audio_bytes(audio_bytes)
+                                    
+                                    if transcription:
+                                        # Send transcription to client
+                                        r.publish(f"response:{session_id}", json.dumps({
+                                            "type": "transcription",
+                                            "text": transcription
+                                        }))
+                                        
+                                        # Send to LLM worker
+                                        llm_payload = {
+                                            "session_id": session_id,
+                                            "text_input": transcription,
+                                        }
+                                        r.publish("realtime_llm", json.dumps(llm_payload))
+                                        logger.info(f"Auto-transcription sent for session {session_id}")
+                                    
+                                    # Reset buffer AND session state for next turn
+                                    session_buffers[session_id] = b""
+                                    state["is_speaking"] = False
+                                    state["silence_start"] = None
+                            
                             # Log progress (every 10 chunks)
                             chunk_count = len(session_buffers[session_id]) // 8192 # Approximate
                             if chunk_count > 0 and chunk_count % 10 == 0:
-                                logger.info(f"Session {session_id}: Buffer size {len(session_buffers[session_id])} bytes (~{len(session_buffers[session_id])/32000:.1f}s)")
+                                logger.info(f"Session {session_id}: Buffer size {len(session_buffers[session_id])} bytes (~{len(session_buffers[session_id])/32000:.1f}s, energy: {energy:.4f})")
                             
                 except Exception as e:
                     logger.error(f"Error processing real-time audio: {e}")
