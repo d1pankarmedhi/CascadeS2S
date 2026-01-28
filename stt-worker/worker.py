@@ -3,14 +3,13 @@ import os
 import time
 import traceback
 import threading
-
 import redis
 from logger import setup_logger
 from ml_service.model import transcribe_audio_file, transcribe_audio_bytes
 
 logger = setup_logger("stt_worker")
 
-# --- Set up Redis connection ---
+# Set up Redis connection 
 try:
     r = redis.Redis(host="redis", port=6379, db=0)
     r.ping()
@@ -50,7 +49,7 @@ def process_realtime_audio():
                             
                             logger.info(f"Processing end of stream for session {session_id}")
                             
-                            # --- Start Transcription Process ---
+                            # Start Transcription Process 
                             trigger_time = time.time()
                             
                             # Transcribe accumulated audio
@@ -95,7 +94,7 @@ def process_realtime_audio():
                             # Append to buffer
                             session_buffers[session_id] += audio_chunk
                             
-                            # --- Automatic Turn-Taking (Silence Detection) ---
+                            # Automatic Turn-Taking (Silence Detection) 
                             # Constants for silence detection
                             SILENCE_THRESHOLD = 0.01  # RMS energy below this is "silence"
                             SILENCE_DURATION_S = 0.8  # Required silence duration to trigger response
@@ -129,7 +128,7 @@ def process_realtime_audio():
                                 elif current_time - state["silence_start"] >= SILENCE_DURATION_S:
                                     logger.info(f"Session {session_id}: Auto-triggering response after {current_time - state["silence_start"]:.1f}s of silence")
                                     
-                                    # --- Start Transcription Process ---
+                                    # Start Transcription Process 
                                     trigger_time = time.time()
                                     
                                     # Trigger transcription
