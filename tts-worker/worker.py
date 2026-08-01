@@ -12,7 +12,7 @@ from logger import setup_logger
 
 logger = setup_logger("tts_worker")
 
-# --- Set up Redis connection ---
+# Set up Redis connection
 try:
     r = redis.Redis(host="redis", port=6379, db=0)
     r.ping()
@@ -21,7 +21,7 @@ except redis.exceptions.ConnectionError as e:
     logger.error(f"TTS Worker could not connect to Redis: {e}")
     r = None
 
-# --- Pocket TTS Model Setup ---
+# Pocket TTS Model Setup
 # Set device (defaulting to CPU for Pocket TTS as per docs, but can use CUDA if needed)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 logger.info(f"Using device: {device}")
@@ -180,6 +180,8 @@ def process_batch_jobs():
                         "job_id": job_id,
                         "status": "completed",
                         "final_audio_path": audio_filename,
+                        "transcription": job_payload.get("transcription"),
+                        "llm_response": text_to_speech
                     }
                     r.set(f"result:{job_id}", json.dumps(final_payload))
                     logger.info(f"TTS Worker completed job {job_id}. Final audio saved.")
