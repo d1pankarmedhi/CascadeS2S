@@ -1,10 +1,10 @@
 <div align="center">
 <h1>Cascade Speech-to-Speech</h1>
 <p>A low-latency, real-time voice agent platform featuring natural conversational turn-taking and semantic barge-in (interruption).
-<br>Built with <b>FastAPI</b>, <b>React</b>, <b>WebSockets</b>, and <b>Redis</b>. Supported by <b>faster-whisper</b> and <b>Pocket TTS</b>.
+<br>Built with <b>FastAPI</b>, <b>React</b>, <b>WebSockets</b>, and <b>gRPC</b>. Supported by <b>faster-whisper</b> and <b>Pocket TTS</b>.
 </p>
 
-![Python](https://img.shields.io/badge/Python-blue.svg?style=flat&logo=python&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=fff) ![Redis](https://img.shields.io/badge/Redis-%23DD0031.svg?logo=redis&logoColor=white) ![React](https://img.shields.io/badge/React-20232A?style=flat&logo=react&logoColor=61DAFB)
+![Python](https://img.shields.io/badge/Python-blue.svg?style=flat&logo=python&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=fff) ![gRPC](https://img.shields.io/badge/gRPC-244C5A.svg?logo=grpc&logoColor=white) ![React](https://img.shields.io/badge/React-20232A?style=flat&logo=react&logoColor=61DAFB)
 
 <img width="800" alt="interface" src="assets/interface.png" />
 </div>
@@ -15,7 +15,7 @@
 - **Smart Turn-Taking**: Hybrid heuristic endpointing detects semantic boundaries (punctuation vs. filler words) to know exactly when you've finished speaking.
 - **Semantic Barge-in**: Agent gracefully ignores non-verbal backchannels ("uh-huh", "yeah") without interrupting its own speech.
 - **Modern React Frontend**: A beautiful, OpenAI-style "Breathing Orb" UI built with React, Vite, and Client-Side Web Audio API VAD (Voice Activity Detection).
-- **Asynchronous API**: Highly optimized FastAPI gateway using `redis.asyncio` for zero-polling, fully non-blocking WebSocket streams.
+- **Asynchronous API**: Highly optimized FastAPI gateway using `grpc.aio` for fully non-blocking, point-to-point bidirectional streams.
 - **Optimized AI Stack**: `faster-whisper` for fast STT, local LLMs (via Ollama), and `Pocket TTS` for speech generation.
 
 ## 🚀 Quick Start
@@ -40,7 +40,7 @@ The application will be available at [http://localhost:5173](http://localhost:51
 
 ## 🏗️ Architecture
 
-CascadeS2S relies on an event-driven microservice architecture connected via Redis Pub/Sub, allowing workers to operate concurrently and cancel ongoing generations instantly when an interruption occurs.
+CascadeS2S relies on a gRPC microservice architecture. The FastAPI gateway orchestrates bidirectional streams with worker nodes, allowing for ultra-low latency point-to-point communication and instantaneous interruption capabilities.
 
 ```mermaid
 graph TD
@@ -51,43 +51,31 @@ graph TD
     end
 
     subgraph Backend [FastAPI Gateway]
-        API[WebSocket API<br>Async Redis]
+        API[WebSocket API<br>gRPC Orchestrator]
     end
 
-    subgraph Workers [Python Microservices]
-        STT[STT Worker<br>Faster-Whisper<br>Endpointing and Barge-in]
+    subgraph Workers [gRPC Microservices]
+        STT[STT Worker<br>Faster-Whisper]
         LLM[LLM Worker<br>Ollama]
         TTS[TTS Worker<br>Pocket TTS]
     end
-
-    Redis[(Redis Pub/Sub<br>Message Bus)]
 
     %% Connections
     UI <-->|WebSocket<br>PCM Audio & JSON| API
     VAD -->|Triggers volume ducking| Gain
     VAD -->|Emits speech_started| API
     
-    API <-->|realtime_audio| Redis
-    
-    Redis <-->|realtime_audio| STT
-    STT -->|system_control interrupt| Redis
-    STT -->|realtime_llm| Redis
-    
-    Redis <-->|realtime_llm| LLM
-    LLM -->|realtime_tts| Redis
-    
-    Redis <-->|realtime_tts| TTS
-    TTS -->|response session_id| Redis
-    
-    Redis -->|system_control / response| API
+    API <-->|gRPC Bidirectional Stream<br>AudioChunk / STTEvent| STT
+    API <-->|gRPC Bidirectional Stream<br>TextChunk / LLMEvent| LLM
+    API <-->|gRPC Bidirectional Stream<br>TextChunk / AudioChunk| TTS
 ```
 
 ### System Components:
 - **`frontend/`**: React/Vite application. Uses `AudioWorklet` for low-latency VAD. Ducks agent audio to 20% on user speech.
-- **`api/`**: Async FastAPI Gateway. Relays WebSockets to Redis channels. 
-- **`stt-worker/`**: Speech-to-Text. Evaluates semantics to determine turn boundaries and checks for true barge-in vs. backchannels.
-- **`llm-worker/`**: Language Model. Streams tokens. Listens to `system_control` to halt generation instantly on interruption.
-- **`tts-worker/`**: Speech synthesis. Aborts queued audio generation if the session is interrupted.
+- **`api/`**: Async FastAPI Gateway. Relays WebSockets to gRPC bidirectional streams. 
+- **`stt-worker/`**: Speech-to-Text gRPC server. Evaluates semantics to determine turn boundaries and checks for true barge-in vs. backchannels.
+- **`llm-worker/`**: Language Model gRPC server. Streams tokens and halts generation instantly on stream disconnect.
+- **`tts-worker/`**: Speech synthesis gRPC server. Synthesizes text chunks directly into audio byte streams.
 
 ### Data Flow (Barge-In Sequence):
 ```mermaid
@@ -95,52 +83,45 @@ sequenceDiagram
     participant User
     participant Frontend
     participant API
-    participant Redis
-    participant STT as STT Worker
-    participant LLM as LLM Worker
-    participant TTS as TTS Worker
+    participant STT as STT Service
+    participant LLM as LLM Service
+    participant TTS as TTS Service
 
     User->>Frontend: Speaks
     Frontend->>Frontend: VAD detects speech
     Frontend->>Frontend: Duck agent audio to 20%
     Frontend->>API: {"type": "speech_started"}
-    API->>Redis: Publish to realtime_audio
+    API->>STT: Stream AudioChunk (speech_started=True)
     Frontend->>API: Stream PCM Audio Bytes
-    API->>Redis: Publish audio bytes
+    API->>STT: Stream AudioChunk (bytes)
     
-    Redis->>STT: Receive audio & speech_started
     STT->>STT: Analyze audio (Semantic Barge-in check at 500ms)
     
     alt Is Backchannel (e.g., "uh-huh")
-        STT->>Redis: Publish {"type": "restore_audio"} to system_control
-        Redis->>API: Route system_control
+        STT->>API: Yield STTEvent (restore_audio=True)
         API->>Frontend: Send restore_audio
         Frontend->>Frontend: Restore agent volume to 100%
     else Is True Interruption
-        STT->>Redis: Publish {"action": "interrupt"} to system_control
-        Redis->>LLM: Abort current generation
-        Redis->>TTS: Flush pending audio jobs
-        Redis->>API: Route system_control
+        STT->>API: Yield STTEvent (interrupt=True)
         API->>Frontend: Send stop_audio
         Frontend->>Frontend: Halt playback immediately
     end
     
     User->>Frontend: Stops speaking
     Frontend->>API: {"type": "end_stream"}
-    API->>Redis: Publish to realtime_audio
+    API->>STT: Stream AudioChunk (end_stream=True)
     
-    STT->>STT: Hybrid Heuristic Endpointing (0.4s to 2.5s)
-    STT->>Redis: Publish transcribed text to realtime_llm
+    STT->>STT: Hybrid Heuristic Endpointing
+    STT->>API: Yield STTEvent (is_final=True, text="...")
     
-    Redis->>LLM: Receive text
+    API->>LLM: Stream TextChunk (text="...")
     LLM->>LLM: Generate response stream
-    LLM->>Redis: Publish tokens to realtime_tts
+    LLM->>API: Yield LLMEvent (text_chunk="...")
     
-    Redis->>TTS: Receive tokens
+    API->>TTS: Stream TextChunk (text="...")
     TTS->>TTS: Synthesize audio
-    TTS->>Redis: Publish audio payload to response session_id
+    TTS->>API: Yield AudioChunk (bytes)
     
-    Redis->>API: Receive audio payload
     API->>Frontend: Stream audio bytes via WebSocket
     Frontend->>User: Plays agent response
 ```
