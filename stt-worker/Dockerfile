@@ -41,6 +41,6 @@ COPY --from=builder /root/.cache/huggingface /root/.cache/huggingface
 
 # Copy application code
 COPY ./stt-worker/ .
-COPY ./utils/logger.py .
+COPY ./utils ./utils
 
 CMD ["python", "worker.py"]

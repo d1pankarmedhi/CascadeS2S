@@ -1,35 +1,33 @@
 import asyncio
 import json
 import os
-import shutil
 import uuid
-from typing import Dict
+import grpc
 
-import redis
-import uvicorn
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-# Redis connection setup
-try:
-    r = redis.Redis(host="redis", port=6379, db=0)
-    # Check if the connection is working
-    r.ping()
-    print("API connected to Redis successfully!")
-except redis.exceptions.ConnectionError as e:
-    print(f"API could not connect to Redis: {e}")
-    r = None
+# Import generated gRPC stubs
+import sys
+import os
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
+if os.path.exists(os.path.join(parent_dir, "utils")):
+    sys.path.append(parent_dir)
+else:
+    sys.path.append(current_dir)
+from utils import voice_pb2, voice_pb2_grpc
 
-# FastAPI app setup
+STT_HOST = os.getenv("STT_HOST", "stt-worker:50051")
+LLM_HOST = os.getenv("LLM_HOST", "llm-worker:50052")
+TTS_HOST = os.getenv("TTS_HOST", "tts-worker:50053")
+
 app = FastAPI(
     title="CascadeS2S Real-Time Voice API",
-    description="API for real-time voice conversation with AI.",
+    description="API for real-time voice conversation with AI using gRPC.",
     version="2.0.0",
 )
 
-# Add CORS middleware for browser access
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,181 +36,137 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Session management
-active_sessions: Dict[str, dict] = {}
-
-
-@app.get("/")
-async def root():
-    """Serve the main web interface."""
-    with open("static/index.html", "r") as f:
-        return HTMLResponse(content=f.read())
-
-
 @app.websocket("/ws/voice")
 async def websocket_voice_endpoint(websocket: WebSocket):
-    """
-    WebSocket endpoint for real-time voice conversation.
-    Handles bidirectional audio streaming.
-    """
     await websocket.accept()
     session_id = str(uuid.uuid4())
-    
-    if not r:
-        await websocket.send_json({"type": "error", "message": "Redis service not available"})
-        await websocket.close()
-        return
-    
-    # Create session with telemetry tracking
-    active_sessions[session_id] = {
-        "websocket": websocket,
-        "audio_buffer": b"",
-        "context": [],
-        "chunks": 0,
-        "bytes": 0
-    }
-    
     print(f"New WebSocket connection established: {session_id}")
-    
-    # Create pubsub for this session to receive responses
-    pubsub = r.pubsub()
-    pubsub.subscribe(f"response:{session_id}")
-    
-    try:
-        # Start listening for responses from workers in background
-        async def listen_for_responses():
-            """Listen for responses from workers and send to client."""
-            while True:
-                message = pubsub.get_message(ignore_subscribe_messages=True)
-                if message and message['type'] == 'message':
-                    data = json.loads(message['data'])
+
+    # Channels
+    stt_channel = grpc.aio.insecure_channel(STT_HOST)
+    llm_channel = grpc.aio.insecure_channel(LLM_HOST)
+    tts_channel = grpc.aio.insecure_channel(TTS_HOST)
+
+    stt_stub = voice_pb2_grpc.STTServiceStub(stt_channel)
+    llm_stub = voice_pb2_grpc.LLMServiceStub(llm_channel)
+    tts_stub = voice_pb2_grpc.TTSServiceStub(tts_channel)
+
+    audio_queue = asyncio.Queue()
+
+    async def stt_request_generator():
+        while True:
+            chunk = await audio_queue.get()
+            if chunk is None:
+                yield voice_pb2.AudioChunk(session_id=session_id, end_stream=True)
+                break
+            elif isinstance(chunk, dict):
+                # Control signal
+                yield voice_pb2.AudioChunk(
+                    session_id=session_id, 
+                    speech_started=chunk.get("speech_started", False),
+                    end_stream=chunk.get("end_stream", False)
+                )
+            else:
+                # Audio bytes
+                yield voice_pb2.AudioChunk(session_id=session_id, data=chunk)
+
+    async def process_llm_and_tts(text: str):
+        """When STT yields a final transcript, stream it to LLM, then to TTS."""
+        async def llm_request_generator():
+            yield voice_pb2.TextChunk(session_id=session_id, text=text)
+            yield voice_pb2.TextChunk(session_id=session_id, end_stream=True)
+
+        try:
+            llm_stream = llm_stub.GenerateStream(llm_request_generator())
+            
+            # Queue to pass text chunks from LLM to TTS
+            tts_text_queue = asyncio.Queue()
+
+            async def tts_request_generator():
+                while True:
+                    chunk = await tts_text_queue.get()
+                    if chunk is None:
+                        yield voice_pb2.TextChunk(session_id=session_id, end_stream=True)
+                        break
+                    yield voice_pb2.TextChunk(session_id=session_id, text=chunk)
+
+            # Start TTS stream
+            tts_stream = tts_stub.SynthesizeStream(tts_request_generator())
+
+            # Read from LLM and send to client & TTS
+            async def read_llm():
+                async for response in llm_stream:
+                    if response.text_chunk:
+                        await websocket.send_json({
+                            "type": "llm_response",
+                            "text": response.text_chunk
+                        })
+                        await tts_text_queue.put(response.text_chunk)
                     
-                    if data.get('type') == 'transcription':
-                        await websocket.send_json(data)
-                    elif data.get('type') == 'llm_response':
-                        await websocket.send_json(data)
-                    elif data.get('type') == 'latency_report':
-                        await websocket.send_json(data)
-                    elif data.get('type') == 'audio':
-                        # Send binary audio data
-                        audio_path = data.get('audio_path')
-                        if audio_path and os.path.exists(audio_path):
-                            with open(audio_path, 'rb') as f:
-                                audio_data = f.read()
-                            await websocket.send_bytes(audio_data)
-                            # Clean up audio file
-                            os.remove(audio_path)
+                    if response.stream_finished:
+                        break
+                await tts_text_queue.put(None) # EOF for TTS
+
+            # Read from TTS and send to client
+            async def read_tts():
+                async for response in tts_stream:
+                    if response.audio_chunk:
+                        await websocket.send_bytes(response.audio_chunk)
+
+            await asyncio.gather(read_llm(), read_tts())
+            
+        except Exception as e:
+            print(f"Error in LLM/TTS pipeline: {e}")
+
+
+    async def listen_stt(stt_stream):
+        try:
+            async for response in stt_stream:
+                if response.interrupt or response.restore_audio:
+                    # Semantic barge-in
+                    action = "stop_audio" if response.interrupt else "restore_audio"
+                    await websocket.send_json({"type": action})
                 
-                await asyncio.sleep(0.01)
-        
-        # Start background task
-        response_task = asyncio.create_task(listen_for_responses())
-        
-        # Main loop: receive audio from client
+                if response.text:
+                    await websocket.send_json({
+                        "type": "transcription",
+                        "text": response.text
+                    })
+                    
+                    if response.is_final:
+                        # Launch LLM/TTS cascade for this utterance
+                        asyncio.create_task(process_llm_and_tts(response.text))
+        except grpc.aio.AioRpcError as e:
+            print(f"STT gRPC error: {e}")
+        except Exception as e:
+            print(f"STT stream listener error: {e}")
+
+    try:
+        # Start STT stream
+        stt_stream = stt_stub.TranscribeStream(stt_request_generator())
+        listen_task = asyncio.create_task(listen_stt(stt_stream))
+
         while True:
             data = await websocket.receive()
-            
             if "bytes" in data:
-                # Received audio chunk
-                audio_chunk = data["bytes"]
-                
-                # Track metrics
-                session_data = active_sessions[session_id]
-                session_data["chunks"] += 1
-                session_data["bytes"] += len(audio_chunk)
-                
-                if session_data["chunks"] % 20 == 0:
-                    print(f"Session {session_id}: Received {session_data['chunks']} chunks ({session_data['bytes']} total bytes)")
-                
-                # Send to STT worker via Redis - Optimization: Use raw binary instead of hex JSON
-                # Protocol: [4-byte session_id length][session_id][audio_chunk]
-                sid_bytes = session_id.encode('utf-8')
-                sid_len = len(sid_bytes).to_bytes(4, byteorder='big')
-                binary_payload = sid_len + sid_bytes + audio_chunk
-                
-                r.publish("realtime_audio", binary_payload)
-            
+                await audio_queue.put(data["bytes"])
             elif "text" in data:
                 message = json.loads(data["text"])
-                
                 if message.get("type") == "end_stream":
-                    print(f"Session {session_id}: End of stream signal received. Total bytes: {active_sessions.get(session_id, {}).get('bytes', 0)}")
-                    # Signal end of audio stream
-                    r.publish("realtime_audio", json.dumps({
-                        "session_id": session_id,
-                        "type": "end_stream"
-                    }))
-                    
-                    # Reset counters for next potential recording in same session
-                    if session_id in active_sessions:
-                        active_sessions[session_id]["chunks"] = 0
-                        active_sessions[session_id]["bytes"] = 0
-    
+                    await audio_queue.put({"end_stream": True})
+                elif message.get("type") == "speech_started":
+                    await audio_queue.put({"speech_started": True})
+
     except WebSocketDisconnect:
         print(f"WebSocket disconnected: {session_id}")
     except Exception as e:
         print(f"WebSocket error for {session_id}: {e}")
     finally:
-        # Cleanup
-        response_task.cancel()
-        pubsub.unsubscribe(f"response:{session_id}")
-        pubsub.close()
-        if session_id in active_sessions:
-            del active_sessions[session_id]
+        await audio_queue.put(None) # Shutdown generator
+        await stt_channel.close()
+        await llm_channel.close()
+        await tts_channel.close()
         print(f"Session cleaned up: {session_id}")
-
-
-@app.post("/transcribe")
-async def queue_transcription(audio_file: UploadFile = File(...)):
-    """
-    [LEGACY ENDPOINT - Batch Processing]
-    Receives an audio file, saves it, and adds a transcription job to the queue.
-    Returns a job ID for status tracking.
-    """
-    if not r:
-        raise HTTPException(status_code=503, detail="Redis service is not available.")
-
-    job_id = str(uuid.uuid4())
-    os.makedirs("shared_data", exist_ok=True)
-    file_path = f"shared_data/{job_id}_{audio_file.filename}"
-
-    try:
-        # Save the audio file to the shared volume
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(audio_file.file, buffer)
-
-        # Create a job payload and push it to the queue
-        job_payload = {"job_id": job_id, "file_path": file_path}
-        r.lpush("transcription_jobs", json.dumps(job_payload))
-
-        return JSONResponse(
-            content={"message": "Transcription job submitted.", "job_id": job_id}
-        )
-    except Exception as e:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        raise HTTPException(status_code=500, detail=f"Failed to submit job: {e}")
-
-
-@app.get("/status/{job_id}")
-async def get_job_status(job_id: str):
-    """
-    [LEGACY ENDPOINT - Batch Processing]
-    Retrieves the status and result of a transcription job.
-    """
-    if not r:
-        raise HTTPException(status_code=503, detail="Redis service is not available.")
-
-    result = r.get(f"result:{job_id}")
-
-    if result:
-        return JSONResponse(content=json.loads(result))
-    else:
-        return JSONResponse(content={"job_id": job_id, "status": "pending"})
-
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -12,7 +12,9 @@ services:
       - ./api/static:/app/static
       - ./output:/app/output
     depends_on:
-      - redis
+      - stt-worker
+      - llm-worker
+      - tts-worker
 
   stt-worker:
     build:
@@ -23,8 +25,7 @@ services:
     volumes:
       - ./shared_data:/app/shared_data
       - ./output:/app/output
-    depends_on:
-      - redis
+
     deploy:
       replicas: 1
     
@@ -38,7 +39,6 @@ services:
       - ./shared_data:/app/shared_data
       - ./output:/app/output
     depends_on:
-      - redis
       - ollama
     deploy:
       replicas: 1
@@ -59,16 +59,7 @@ services:
       - ./shared_data:/app/shared_data
       - ./output:/app/output
     depends_on:
-      - redis
       - llm-worker
     deploy:
       replicas: 1
   
-  redis:
-    image: redis:6.2-alpine
-    container_name: redis-queue
-    ports:
-      - "6379:6379"
-
-
-

@@ -23,7 +23,7 @@ COPY --from=builder /usr/local/lib/python3.10/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY ./api/main.py .
-COPY ./utils/logger.py .
+COPY ./utils ./utils
 COPY ./api/static ./static
 
 EXPOSE 8000

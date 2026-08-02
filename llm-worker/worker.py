@@ -1,48 +1,40 @@
-# llm-worker/worker.py
-import json
 import os
 import time
 import threading
-
-import redis
+from concurrent import futures
+import grpc
 from dotenv import load_dotenv
 import ollama
-from logger import setup_logger
+
+import sys
+import os
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
+if os.path.exists(os.path.join(parent_dir, "utils")):
+    sys.path.append(parent_dir)
+else:
+    sys.path.append(current_dir)
+from utils import voice_pb2, voice_pb2_grpc
+from utils.logger import setup_logger
 
 load_dotenv()
 
-# Configuration
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
 MODEL_NAME = "qwen2.5:0.5b"
 logger = setup_logger("llm_worker")
 
-# State
 model_ready = False
-
-# Setup Redis connection
-try:
-    r = redis.Redis(host="redis", port=6379, db=0)
-    r.ping()
-    logger.info("LLM Worker connected to Redis successfully!")
-except redis.exceptions.ConnectionError as e:
-    logger.error(f"LLM Worker could not connect to Redis: {e}")
-    r = None
-
-# Initialize Ollama client
 client = ollama.Client(host=OLLAMA_HOST)
 
 def ensure_model_pulled():
-    """Ensure the required model is available in Ollama (Background thread)."""
     global model_ready
     while not model_ready:
         try:
             logger.info(f"Checking for model {MODEL_NAME}...")
-            # Check if model exists first
             models_response = client.list()
             models_list = models_response.get('models', []) if isinstance(models_response, dict) else getattr(models_response, 'models', [])
             
             for m in models_list:
-                # Handle both dict and object formats from different ollama library versions
                 name = m.get('name', '') if isinstance(m, dict) else getattr(m, 'model', getattr(m, 'name', ''))
                 if name == MODEL_NAME or name.startswith(MODEL_NAME + ":"):
                     logger.info(f"Model {MODEL_NAME} is already available.")
@@ -57,206 +49,63 @@ def ensure_model_pulled():
             logger.error(f"Failed to check/pull model {MODEL_NAME}: {e}. Retrying in 30s...")
             time.sleep(30)
 
+class LLMServiceServicer(voice_pb2_grpc.LLMServiceServicer):
+    def GenerateStream(self, request_iterator, context):
+        session_id = None
+        text_input = ""
+        
+        for request in request_iterator:
+            if session_id is None:
+                session_id = request.session_id
+            if request.text:
+                text_input += request.text + " "
+            
+            if request.end_stream:
+                break
+                
+        if not text_input.strip() or not model_ready:
+            yield voice_pb2.LLMEvent(session_id=session_id, stream_finished=True)
+            return
 
-def generate_response(text_input):
-    """Generate a non-streaming response from Ollama."""
-    response = client.chat(
-        model=MODEL_NAME,
-        messages=[
-            {'role': 'system', 'content': 'You are a helpful voice assistant. Give concise, natural responses as if in a spoken conversation in English. Keep responses brief (1-3 sentences).'},
-            {'role': 'user', 'content': text_input},
-        ],
-    )
-    return response['message']['content']
+        logger.info(f"Generating for session {session_id}: {text_input}")
+        start_time = time.time()
+        
+        try:
+            stream = client.chat(
+                model=MODEL_NAME,
+                messages=[
+                    {'role': 'system', 'content': 'You are a helpful voice assistant. Give concise, natural responses as if in a spoken conversation in English. Keep responses brief (1-3 sentences).'},
+                    {'role': 'user', 'content': text_input.strip()},
+                ],
+                stream=True,
+            )
 
+            for chunk in stream:
+                # context.is_active() checks if client disconnected
+                if not context.is_active():
+                    break
+                content = chunk['message']['content']
+                yield voice_pb2.LLMEvent(
+                    session_id=session_id,
+                    text_chunk=content,
+                    llm_latency_ms=(time.time() - start_time) * 1000
+                )
+                
+            yield voice_pb2.LLMEvent(session_id=session_id, stream_finished=True)
+            logger.info(f"Generation complete for session {session_id}")
+            
+        except Exception as e:
+            logger.error(f"Error in LLM stream: {e}")
 
-def process_realtime_requests():
-    """
-    Listens for real-time LLM requests via Redis pubsub.
-    Processes text and sends responses back with streaming.
-    """
-    if not r:
-        logger.error("Cannot start real-time processor - no Redis connection")
-        return
+def serve():
+    threading.Thread(target=ensure_model_pulled, daemon=True).start()
     
-    pubsub = r.pubsub()
-    pubsub.subscribe("realtime_llm")
-    logger.info("LLM Worker listening for real-time requests...")
-    
-    try:
-        for message in pubsub.listen():
-            if message['type'] == 'message':
-                try:
-                    data = json.loads(message['data'])
-                    session_id = data.get("session_id")
-                    text_input = data.get("text_input")
-                    
-                    if not session_id or not text_input:
-                        continue
-                    
-                    if not model_ready:
-                        logger.warning(f"Model {MODEL_NAME} is not ready yet.")
-                        r.publish(f"response:{session_id}", json.dumps({
-                            "type": "llm_response",
-                            "text": "Please wait a moment, I am still preparing my thoughts.",
-                            "is_final": True
-                        }))
-                        continue
-
-                    metrics = data.get("metrics", {})
-                    trigger_time = metrics.get("trigger_time", time.time())
-                    
-                    logger.info(f"Processing real-time request for session {session_id} ({len(text_input)} chars)")
-                    
-                    start_time = time.time()
-                    full_response = ""
-                    sentence_buffer = ""
-                    sentence_delimiters = {'.', '?', '!', '\n'}
-                    
-                    # Notify client that we're starting
-                    r.publish(f"response:{session_id}", json.dumps({
-                        "type": "llm_response",
-                        "text": "",
-                        "is_final": False
-                    }))
-
-                    # Stream from Ollama
-                    stream = client.chat(
-                        model=MODEL_NAME,
-                        messages=[
-                            {'role': 'system', 'content': 'You are a helpful voice assistant. Give concise, natural responses as if in a spoken conversation in English. Keep responses brief (1-3 sentences).'},
-                            {'role': 'user', 'content': text_input},
-                        ],
-                        stream=True,
-                    )
-
-                    for chunk in stream:
-                        content = chunk['message']['content']
-                        full_response += content
-                        sentence_buffer += content
-                        
-                        # Send partial text update to client
-                        r.publish(f"response:{session_id}", json.dumps({
-                            "type": "llm_response",
-                            "text": full_response,
-                            "is_final": False
-                        }))
-                        
-                        # Check for sentence boundaries to stream to TTS
-                        if any(delim in sentence_buffer for delim in sentence_delimiters):
-                            for delim in sentence_delimiters:
-                                if delim in sentence_buffer:
-                                    parts = sentence_buffer.split(delim)
-                                    for i in range(len(parts) - 1):
-                                        completed_sentence = parts[i] + delim
-                                        if completed_sentence.strip():
-                                            r.publish("realtime_tts", json.dumps({
-                                                "session_id": session_id,
-                                                "text_to_speech": completed_sentence.strip(),
-                                                "metrics": {**metrics, "llm_latency_ms": (time.time() - start_time) * 1000},
-                                                "is_final": False # Not final yet
-                                            }))
-                                    
-                                    sentence_buffer = parts[-1]
-                                    break
-
-                    # Final cleanup of remaining text
-                    if sentence_buffer.strip():
-                        r.publish("realtime_tts", json.dumps({
-                            "session_id": session_id,
-                            "text_to_speech": sentence_buffer.strip(),
-                            "metrics": {**metrics, "llm_latency_ms": (time.time() - start_time) * 1000},
-                            "is_final": True # This is the last one
-                        }))
-                    
-                    # Send final result to client
-                    r.publish(f"response:{session_id}", json.dumps({
-                        "type": "llm_response",
-                        "text": full_response,
-                        "is_final": True
-                    }))
-
-                    logger.info(f"LLM streaming completed for session {session_id} (Total Latency: {(time.time() - start_time)*1000:.2f}ms)")
-                    
-                except Exception as e:
-                    logger.error(f"Error processing real-time LLM request: {e}")
-    
-    except KeyboardInterrupt:
-        logger.info("Real-time processor shutting down...")
-    finally:
-        pubsub.close()
-
-
-def process_batch_jobs():
-    """
-    [LEGACY] Listens for batch jobs on the llm_jobs queue.
-    """
-    if not r:
-        logger.error("Exiting LLM worker due to no Redis connection.")
-        return
-
-    logger.info("LLM Worker listening for batch jobs...")
-    try:
-        while True:
-            job_data = r.brpop("llm_jobs", timeout=1)
-
-            if job_data:
-                job_payload = json.loads(job_data[1])
-                job_id = job_payload.get("job_id")
-                text_input = job_payload.get("text_input")
-
-                logger.info(f"LLM Worker processing batch job {job_id}")
-
-                try:
-                    llm_response = generate_response(text_input)
-
-                    if model_ready:
-                        # Push the result to the new 'tts_jobs' queue for the next stage
-                        tts_payload = {
-                            "job_id": job_id, 
-                            "text_to_speech": llm_response,
-                            "transcription": text_input
-                        }
-                        r.lpush("tts_jobs", json.dumps(tts_payload))
-                        logger.info(f"LLM Worker completed job {job_id}. Pushed to TTS queue.")
-                    else:
-                        # If model not ready, store the error/status in result
-                        r.set(f"result:{job_id}", json.dumps({
-                            "job_id": job_id,
-                            "status": "failed",
-                            "error": "Local model still loading"
-                        }))
-
-                except Exception as e:
-                    error_payload = {
-                        "job_id": job_id,
-                        "status": "failed",
-                        "error": str(e),
-                    }
-                    if job_id:
-                        r.set(f"result:{job_id}", json.dumps(error_payload))
-
-                    logger.error(f"LLM Worker job {job_id} failed with error: {e}")
-
-    except KeyboardInterrupt:
-        logger.info("Batch processor shutting down...")
-
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    voice_pb2_grpc.add_LLMServiceServicer_to_server(LLMServiceServicer(), server)
+    server.add_insecure_port("[::]:50052")
+    logger.info("LLM Worker gRPC server starting on port 50052...")
+    server.start()
+    server.wait_for_termination()
 
 if __name__ == "__main__":
-    # Start model pull in background
-    pull_thread = threading.Thread(target=ensure_model_pulled, daemon=True)
-    pull_thread.start()
-    
-    # Run both real-time and batch processors in parallel
-    realtime_thread = threading.Thread(target=process_realtime_requests, daemon=True)
-    batch_thread = threading.Thread(target=process_batch_jobs, daemon=True)
-    
-    realtime_thread.start()
-    batch_thread.start()
-    
-    # Keep main thread alive
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("LLM Worker shutting down...")
+    serve()

@@ -1,4 +1,4 @@
-redis>=6.4.0
+grpcio>=1.62.0
 pocket-tts
 scipy
 soundfile

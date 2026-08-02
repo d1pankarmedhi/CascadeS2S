@@ -50,7 +50,7 @@ COPY --from=builder /root/.cache/huggingface/hub/ /root/.cache/huggingface/hub/
 
 # Copy the application code
 COPY ./tts-worker/worker.py .
-COPY ./utils/logger.py .
+COPY ./utils ./utils
 
 # Command to run the worker script
 CMD ["python", "worker.py"]

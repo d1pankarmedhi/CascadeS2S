@@ -1,265 +1,145 @@
-import json
 import os
 import time
 import traceback
-import threading
-import redis
-from logger import setup_logger
-from ml_service.model import transcribe_audio_file, transcribe_audio_bytes
+from concurrent import futures
+import grpc
+import re
+
+import sys
+import os
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.abspath(os.path.join(current_dir, ".."))
+if os.path.exists(os.path.join(parent_dir, "utils")):
+    sys.path.append(parent_dir)
+else:
+    sys.path.append(current_dir)
+from utils import voice_pb2, voice_pb2_grpc
+from utils.logger import setup_logger
+from ml_service.model import transcribe_audio_file, transcribe_audio_bytes, calculate_energy
 
 logger = setup_logger("stt_worker")
 
-# Set up Redis connection 
-try:
-    r = redis.Redis(host="redis", port=6379, db=0)
-    r.ping()
-    logger.info("STT Worker connected to Redis successfully!")
-except redis.exceptions.ConnectionError as e:
-    logger.error(f"STT Worker could not connect to Redis: {e}")
-    r = None
+class STTServiceServicer(voice_pb2_grpc.STTServiceServicer):
+    def TranscribeStream(self, request_iterator, context):
+        session_id = None
+        audio_buffer = b""
+        
+        SILENCE_THRESHOLD = 0.008
+        SILENCE_DURATION_S = 0.5
+        SPEECH_THRESHOLD = 0.015
 
-# Session audio buffers for real-time processing
-session_buffers = {}
+        state = {
+            "is_speaking": False,
+            "silence_start": None,
+            "barge_in_checked": False,
+            "speech_start_time": None,
+            "heuristic_checked": False,
+            "current_transcript": ""
+        }
 
+        try:
+            for request in request_iterator:
+                if session_id is None:
+                    session_id = request.session_id
+                    logger.info(f"Started new gRPC stream for session {session_id}")
+                
+                if request.end_stream:
+                    if audio_buffer:
+                        trigger_time = time.time()
+                        transcription = transcribe_audio_bytes(audio_buffer).strip()
+                        stt_latency_ms = (time.time() - trigger_time) * 1000
+                        if transcription:
+                            yield voice_pb2.STTEvent(
+                                session_id=session_id,
+                                text=transcription,
+                                is_final=True,
+                                stt_latency_ms=stt_latency_ms
+                            )
+                    break
+                
+                if request.data:
+                    audio_buffer += request.data
+                    energy = calculate_energy(request.data)
+                    current_time = time.time()
 
-def process_realtime_audio():
-    """
-    Listens for real-time audio chunks via Redis pubsub.
-    Processes audio chunks and sends transcriptions back.
-    """
-    if not r:
-        logger.error("Cannot start real-time processor - no Redis connection")
-        return
-    
-    pubsub = r.pubsub()
-    pubsub.subscribe("realtime_audio")
-    logger.info("STT Worker listening for real-time audio...")
-    
-    try:
-        for message in pubsub.listen():
-            if message['type'] == 'message':
-                try:
-                    data_raw = message['data']
-                    is_binary = False
-                    is_json = False
-                    
-                    if isinstance(data_raw, bytes):
-                        # If it starts with '{', it's likely a JSON signal
-                        if len(data_raw) > 0 and data_raw[0] == ord('{'):
-                            is_json = True
-                            data_str = data_raw.decode('utf-8')
+                    if energy > SPEECH_THRESHOLD:
+                        if not state["is_speaking"]:
+                            logger.info(f"Session {session_id}: Speech detected (energy: {energy:.4f})")
+                            state["speech_start_time"] = current_time
+                            state["barge_in_checked"] = False
+                            state["heuristic_checked"] = False
+                        state["is_speaking"] = True
+                        state["silence_start"] = None
+                        
+                        # Semantic Barge-In check after 0.5s of speech
+                        time_speaking = current_time - state["speech_start_time"]
+                        if time_speaking >= 0.5 and not state["barge_in_checked"]:
+                            state["barge_in_checked"] = True
+                            quick_transcript = transcribe_audio_bytes(audio_buffer).strip()
+                            cleaned = re.sub(r'[^\w\s]', '', quick_transcript.lower())
+                            backchannels = {"yeah", "uhhuh", "right", "mhm", "ok", "okay", "ah", "oh"}
+                            if cleaned in backchannels or not cleaned:
+                                yield voice_pb2.STTEvent(session_id=session_id, restore_audio=True)
+                                logger.info(f"Session {session_id}: Detected backchannel '{quick_transcript}'")
+                            else:
+                                yield voice_pb2.STTEvent(session_id=session_id, interrupt=True)
+                                logger.info(f"Session {session_id}: Detected barge-in '{quick_transcript}'")
+                                
+                    elif energy < SILENCE_THRESHOLD and state["is_speaking"]:
+                        if state["silence_start"] is None:
+                            state["silence_start"] = current_time
+                            logger.info(f"Session {session_id}: Silence started...")
                         else:
-                            is_binary = True
-                    else:
-                        is_json = True
-                        data_str = data_raw
-                    
-                    if is_binary:
-                        # Protocol: [4-byte session_id length][session_id][audio_chunk]
-                        data_bytes = data_raw
-                        sid_len = int.from_bytes(data_bytes[0:4], byteorder='big')
-                        session_id = data_bytes[4:4+sid_len].decode('utf-8')
-                        audio_chunk = data_bytes[4+sid_len:]
-                        
-                        # Initialize buffer if needed
-                        if session_id not in session_buffers:
-                            session_buffers[session_id] = b""
-                            logger.info(f"Initialized new buffer for session {session_id}")
-                        
-                        # Append to buffer
-                        session_buffers[session_id] += audio_chunk
-                        
-                        # Automatic Turn-Taking (Silence Detection) 
-                        # Optimized constants for faster turn-around
-                        SILENCE_THRESHOLD = 0.008  # Lowered for higher sensitivity
-                        SILENCE_DURATION_S = 0.5    # Reduced from 0.8s for snappier response
-                        SPEECH_THRESHOLD = 0.015   # Lowered from 0.02
-                        
-                        # Get energy of the current chunk
-                        from ml_service.model import calculate_energy
-                        energy = calculate_energy(audio_chunk)
-                        
-                        # Initialize session state if needed
-                        if f"{session_id}_state" not in session_buffers:
-                            session_buffers[f"{session_id}_state"] = {
-                                "is_speaking": False,
-                                "silence_start": None,
-                                "last_energy": energy
-                            }
-                        
-                        state = session_buffers[f"{session_id}_state"]
-                        current_time = time.time()
-                        
-                        if energy > SPEECH_THRESHOLD:
-                            if not state["is_speaking"]:
-                                logger.info(f"Session {session_id}: Speech detected (energy: {energy:.4f})")
-                            state["is_speaking"] = True
-                            state["silence_start"] = None
-                        elif energy < SILENCE_THRESHOLD and state["is_speaking"]:
-                            if state["silence_start"] is None:
-                                state["silence_start"] = current_time
-                                logger.info(f"Session {session_id}: Silence started...")
-                            elif current_time - state["silence_start"] >= SILENCE_DURATION_S:
-                                logger.info(f"Session {session_id}: Auto-triggering response after {current_time - state['silence_start']:.1f}s of silence")
+                            silence_duration = current_time - state["silence_start"]
+                            
+                            if silence_duration >= 0.4 and not state["heuristic_checked"]:
+                                state["heuristic_checked"] = True
+                                state["current_transcript"] = transcribe_audio_bytes(audio_buffer).strip()
                                 
-                                # Start Transcription Process 
+                            transcript = state["current_transcript"]
+                            fast_trigger = transcript.endswith(('?', '.', '!'))
+                            thinking_trigger = transcript.lower().endswith(('um', 'uh', 'so')) or not fast_trigger
+                            
+                            should_trigger = False
+                            if fast_trigger and silence_duration >= 0.4:
+                                should_trigger = True
+                            elif thinking_trigger and silence_duration >= 2.0:
+                                should_trigger = True
+                            elif silence_duration >= 2.5:
+                                should_trigger = True
+                                
+                            if should_trigger:
+                                logger.info(f"Session {session_id}: Auto-triggering response (silence: {silence_duration:.1f}s)")
+                                
                                 trigger_time = time.time()
-                                
-                                # Trigger transcription
-                                audio_bytes = session_buffers[session_id]
-                                transcription = transcribe_audio_bytes(audio_bytes)
-                                
+                                final_transcription = transcript if state["heuristic_checked"] else transcribe_audio_bytes(audio_buffer).strip()
                                 stt_latency_ms = (time.time() - trigger_time) * 1000
                                 
-                                if transcription:
-                                    # Send transcription to client
-                                    r.publish(f"response:{session_id}", json.dumps({
-                                        "type": "transcription",
-                                        "text": transcription
-                                    }))
-                                    
-                                    # Send to LLM worker with latency tracking
-                                    llm_payload = {
-                                        "session_id": session_id,
-                                        "text_input": transcription,
-                                        "metrics": {
-                                            "trigger_time": trigger_time,
-                                            "stt_latency_ms": stt_latency_ms
-                                        }
-                                    }
-                                    r.publish("realtime_llm", json.dumps(llm_payload))
-                                    logger.info(f"Auto-transcription sent for session {session_id} (Latency: {stt_latency_ms:.2f}ms)")
+                                if final_transcription:
+                                    yield voice_pb2.STTEvent(
+                                        session_id=session_id,
+                                        text=final_transcription,
+                                        is_final=True,
+                                        stt_latency_ms=stt_latency_ms
+                                    )
                                 
-                                # Reset buffer AND session state for next turn
-                                session_buffers[session_id] = b""
+                                audio_buffer = b""
                                 state["is_speaking"] = False
                                 state["silence_start"] = None
-                        
-                        # Log progress (every 40 chunks - reduced frequency)
-                        chunk_count = len(session_buffers[session_id]) // 8192
-                        if chunk_count > 0 and chunk_count % 40 == 0:
-                            logger.info(f"Session {session_id}: Buffer size {len(session_buffers[session_id])} bytes (~{len(session_buffers[session_id])/32000:.1f}s, energy: {energy:.4f})")
+                                state["barge_in_checked"] = False
+                                state["heuristic_checked"] = False
 
-                    elif is_json:
-                        # Handle JSON signals (e.g., end_stream)
-                        data = json.loads(data_str)
-                        session_id = data.get("session_id")
-                        
-                        if data.get("type") == "end_stream":
-                            # Process accumulated buffer
-                            if session_id in session_buffers and session_buffers[session_id]:
-                                audio_bytes = session_buffers[session_id]
-                                
-                                logger.info(f"Processing end of stream for session {session_id}")
-                                
-                                # Start Transcription Process 
-                                trigger_time = time.time()
-                                
-                                # Transcribe accumulated audio
-                                transcription = transcribe_audio_bytes(audio_bytes)
-                                
-                                stt_latency_ms = (time.time() - trigger_time) * 1000
-                                
-                                if transcription:
-                                    # Send transcription to client
-                                    r.publish(f"response:{session_id}", json.dumps({
-                                        "type": "transcription",
-                                        "text": transcription
-                                    }))
-                                    
-                                    # Send to LLM worker with latency tracking
-                                    llm_payload = {
-                                        "session_id": session_id,
-                                        "text_input": transcription,
-                                        "metrics": {
-                                            "trigger_time": trigger_time,
-                                            "stt_latency_ms": stt_latency_ms
-                                        }
-                                    }
-                                    r.publish("realtime_llm", json.dumps(llm_payload))
-                                    
-                                    logger.info(f"Transcription sent for session {session_id} (Latency: {stt_latency_ms:.2f}ms): {transcription[:50]}...")
-                                
-                                # Clear buffer
-                                session_buffers[session_id] = b""
-                            
-                except Exception as e:
-                    logger.error(f"Error processing real-time audio: {e}")
-                    traceback.print_exc()
-    
-    except KeyboardInterrupt:
-        logger.info("Real-time processor shutting down...")
-    finally:
-        pubsub.close()
+        except Exception as e:
+            logger.error(f"Error in STT stream: {e}")
+            traceback.print_exc()
 
-
-def process_batch_jobs():
-    """
-    [LEGACY] Listens for batch jobs on the transcription_jobs queue.
-    """
-    if not r:
-        logger.error("Exiting worker due to no Redis connection.")
-        return
-
-    logger.info("STT Worker listening for batch jobs...")
-    try:
-        while True:
-            job_data = r.brpop("transcription_jobs", timeout=1)
-
-            if job_data:
-                job_payload = json.loads(job_data[1])
-                job_id = job_payload.get("job_id")
-                file_path = job_payload.get("file_path")
-
-                logger.info(
-                    f"ASR worker processing batch job {job_id} for file: {file_path}"
-                )
-
-                try:
-                    transcribed_text = transcribe_audio_file(file_path)
-
-                    llm_payload = {
-                        "job_id": job_id,
-                        "text_input": transcribed_text,
-                    }
-
-                    r.lpush("llm_jobs", json.dumps(llm_payload))
-
-                    logger.info(
-                        f"ASR Worker completed job {job_id}. Pushed to LLM queue."
-                    )
-
-                except Exception as e:
-                    # Store an error result in case of failure
-                    error_payload = {
-                        "job_id": job_id,
-                        "status": "failed",
-                        "error": str(e),
-                    }
-                    if job_id:
-                        r.set(f"result:{job_id}", json.dumps(error_payload))
-
-                    logger.error(f"ASR Worker job {job_id} failed with error: {e}")
-                finally:
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-
-    except KeyboardInterrupt:
-        logger.info("Batch processor shutting down...")
-
+def serve():
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    voice_pb2_grpc.add_STTServiceServicer_to_server(STTServiceServicer(), server)
+    server.add_insecure_port("[::]:50051")
+    logger.info("STT Worker gRPC server starting on port 50051...")
+    server.start()
+    server.wait_for_termination()
 
 if __name__ == "__main__":
-    # Run both real-time and batch processors in parallel
-    realtime_thread = threading.Thread(target=process_realtime_audio, daemon=True)
-    batch_thread = threading.Thread(target=process_batch_jobs, daemon=True)
-    
-    realtime_thread.start()
-    batch_thread.start()
-    
-    # Keep main thread alive
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("STT Worker shutting down...")
-
+    serve()
