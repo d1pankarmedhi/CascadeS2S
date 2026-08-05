@@ -1,4 +1,0 @@
-faster-whisper>=1.0.0
-grpcio>=1.62.0
-numpy
-pydub

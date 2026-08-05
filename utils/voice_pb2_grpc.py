@@ -3,7 +3,7 @@
 import grpc
 import warnings
 
-import voice_pb2 as voice__pb2
+from . import voice_pb2 as voice__pb2
 
 GRPC_GENERATED_VERSION = '1.83.0'
 GRPC_VERSION = grpc.__version__

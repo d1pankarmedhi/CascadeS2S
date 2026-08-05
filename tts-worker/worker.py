@@ -24,6 +24,7 @@ logger.info(f"Using device: {device}")
 try:
     from pocket_tts import TTSModel
     model = TTSModel.load_model()
+    model = model.to(device)
     voice_state = model.get_state_for_audio_prompt("alba")
     logger.info("Pocket TTS model and voice state loaded successfully!")
 except Exception as e:
@@ -39,7 +40,7 @@ def synthesize_speech_bytes(text: str) -> bytes:
         import io
         import soundfile as sf
         buffer = io.BytesIO()
-        sf.write(buffer, audio.numpy(), model.sample_rate, format='WAV')
+        sf.write(buffer, audio.cpu().numpy(), model.sample_rate, format='WAV')
         return buffer.getvalue()
     except Exception as e:
         logger.error(f"Error synthesizing speech: {e}")

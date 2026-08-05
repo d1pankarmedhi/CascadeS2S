@@ -24,9 +24,9 @@ class STTServiceServicer(voice_pb2_grpc.STTServiceServicer):
         session_id = None
         audio_buffer = b""
         
-        SILENCE_THRESHOLD = 0.008
+        SILENCE_THRESHOLD = 0.0005
         SILENCE_DURATION_S = 0.5
-        SPEECH_THRESHOLD = 0.015
+        SPEECH_THRESHOLD = 0.0008
 
         state = {
             "is_speaking": False,
@@ -70,21 +70,6 @@ class STTServiceServicer(voice_pb2_grpc.STTServiceServicer):
                             state["heuristic_checked"] = False
                         state["is_speaking"] = True
                         state["silence_start"] = None
-                        
-                        # Semantic Barge-In check after 0.5s of speech
-                        time_speaking = current_time - state["speech_start_time"]
-                        if time_speaking >= 0.5 and not state["barge_in_checked"]:
-                            state["barge_in_checked"] = True
-                            quick_transcript = transcribe_audio_bytes(audio_buffer).strip()
-                            cleaned = re.sub(r'[^\w\s]', '', quick_transcript.lower())
-                            backchannels = {"yeah", "uhhuh", "right", "mhm", "ok", "okay", "ah", "oh"}
-                            if cleaned in backchannels or not cleaned:
-                                yield voice_pb2.STTEvent(session_id=session_id, restore_audio=True)
-                                logger.info(f"Session {session_id}: Detected backchannel '{quick_transcript}'")
-                            else:
-                                yield voice_pb2.STTEvent(session_id=session_id, interrupt=True)
-                                logger.info(f"Session {session_id}: Detected barge-in '{quick_transcript}'")
-                                
                     elif energy < SILENCE_THRESHOLD and state["is_speaking"]:
                         if state["silence_start"] is None:
                             state["silence_start"] = current_time
@@ -128,6 +113,33 @@ class STTServiceServicer(voice_pb2_grpc.STTServiceServicer):
                                 state["silence_start"] = None
                                 state["barge_in_checked"] = False
                                 state["heuristic_checked"] = False
+
+                    # Debug logging for energy
+                    if "chunk_count" not in state:
+                        state["chunk_count"] = 0
+                        state["max_energy"] = 0.0
+                    state["chunk_count"] += 1
+                    state["max_energy"] = max(state["max_energy"], energy)
+                    if state["chunk_count"] >= 100:
+                        if state["max_energy"] > 0.0001:
+                            logger.info(f"Session {session_id}: Max energy over last 100 chunks: {state['max_energy']:.6f}")
+                        state["chunk_count"] = 0
+                        state["max_energy"] = 0.0
+
+                    # Semantic Barge-In check after 0.5s of speech
+                    if state["is_speaking"] and state["speech_start_time"] is not None:
+                        time_speaking = current_time - state["speech_start_time"]
+                        if time_speaking >= 0.5 and not state["barge_in_checked"]:
+                            state["barge_in_checked"] = True
+                            quick_transcript = transcribe_audio_bytes(audio_buffer).strip()
+                            cleaned = re.sub(r'[^\w\s]', '', quick_transcript.lower())
+                            backchannels = {"yeah", "uhhuh", "right", "mhm", "ok", "okay", "ah", "oh"}
+                            if cleaned in backchannels or not cleaned:
+                                yield voice_pb2.STTEvent(session_id=session_id, restore_audio=True)
+                                logger.info(f"Session {session_id}: Detected backchannel '{quick_transcript}'")
+                            else:
+                                yield voice_pb2.STTEvent(session_id=session_id, interrupt=True)
+                                logger.info(f"Session {session_id}: Detected barge-in '{quick_transcript}'")
 
         except Exception as e:
             logger.error(f"Error in STT stream: {e}")

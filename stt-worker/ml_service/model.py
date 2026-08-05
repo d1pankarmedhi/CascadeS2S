@@ -1,16 +1,17 @@
 import io
 import tempfile
 from faster_whisper import WhisperModel
-from logger import setup_logger
+from utils.logger import setup_logger
 
 logger = setup_logger("stt_model")
 
 model = None
 
 try:
-    # Use CPU with 4 threads for faster inference
-    # For GPU: device="cuda", compute_type="float16"
-    model = WhisperModel("tiny", device="cpu", compute_type="int8", num_workers=4)
+    import torch
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    compute_type = "float16" if device == "cuda" else "int8"
+    model = WhisperModel("tiny", device=device, compute_type=compute_type)
     logger.info("Faster-Whisper model loaded successfully (tiny model)")
 except Exception as e:
     logger.error(f"Error loading Faster-Whisper model: {e}")

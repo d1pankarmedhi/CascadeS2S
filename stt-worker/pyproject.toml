@@ -1,0 +1,9 @@
+[project]
+name = "stt-worker"
+version = "0.1.0"
+dependencies = [
+    "faster-whisper>=1.0.0",
+    "grpcio>=1.62.0",
+    "numpy",
+    "pydub",
+]

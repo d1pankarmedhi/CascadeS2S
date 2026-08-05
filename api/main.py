@@ -95,28 +95,42 @@ async def websocket_voice_endpoint(websocket: WebSocket):
 
             # Read from LLM and send to client & TTS
             async def read_llm():
-                async for response in llm_stream:
-                    if response.text_chunk:
-                        await websocket.send_json({
-                            "type": "llm_response",
-                            "text": response.text_chunk
-                        })
-                        await tts_text_queue.put(response.text_chunk)
-                    
-                    if response.stream_finished:
-                        break
-                await tts_text_queue.put(None) # EOF for TTS
+                print(f"[{session_id}] Started reading LLM stream...")
+                try:
+                    async for response in llm_stream:
+                        print(f"[{session_id}] Received LLM chunk: '{response.text_chunk}'")
+                        if response.text_chunk:
+                            await websocket.send_json({
+                                "type": "llm_response",
+                                "text": response.text_chunk
+                            })
+                            await tts_text_queue.put(response.text_chunk)
+                        
+                        if response.stream_finished:
+                            print(f"[{session_id}] LLM stream finished.")
+                            break
+                    await tts_text_queue.put(None) # EOF for TTS
+                except Exception as e:
+                    print(f"[{session_id}] ERROR in read_llm: {e}")
 
             # Read from TTS and send to client
             async def read_tts():
-                async for response in tts_stream:
-                    if response.audio_chunk:
-                        await websocket.send_bytes(response.audio_chunk)
+                print(f"[{session_id}] Started reading TTS stream...")
+                try:
+                    async for response in tts_stream:
+                        print(f"[{session_id}] Received TTS chunk: {len(response.data)} bytes")
+                        if response.data:
+                            await websocket.send_bytes(response.data)
+                    print(f"[{session_id}] TTS stream finished.")
+                except Exception as e:
+                    print(f"[{session_id}] ERROR in read_tts: {e}")
 
+            print(f"[{session_id}] Gathering LLM and TTS tasks...")
             await asyncio.gather(read_llm(), read_tts())
+            print(f"[{session_id}] Cascade for utterance finished successfully.")
             
         except Exception as e:
-            print(f"Error in LLM/TTS pipeline: {e}")
+            print(f"[{session_id}] Error in LLM/TTS pipeline: {e}")
 
 
     async def listen_stt(stt_stream):
@@ -138,8 +152,16 @@ async def websocket_voice_endpoint(websocket: WebSocket):
                         asyncio.create_task(process_llm_and_tts(response.text))
         except grpc.aio.AioRpcError as e:
             print(f"STT gRPC error: {e}")
+            try:
+                await websocket.close(code=1011, reason="STT Service Unavailable")
+            except Exception:
+                pass
         except Exception as e:
             print(f"STT stream listener error: {e}")
+            try:
+                await websocket.close(code=1011, reason="Internal Error")
+            except Exception:
+                pass
 
     try:
         # Start STT stream
@@ -148,9 +170,13 @@ async def websocket_voice_endpoint(websocket: WebSocket):
 
         while True:
             data = await websocket.receive()
-            if "bytes" in data:
+            if data.get("type") == "websocket.disconnect":
+                raise WebSocketDisconnect(code=data.get("code", 1000))
+                
+            if "bytes" in data and data["bytes"]:
                 await audio_queue.put(data["bytes"])
-            elif "text" in data:
+            elif "text" in data and data["text"]:
+                print(f"Received websocket text: {data['text']}")
                 message = json.loads(data["text"])
                 if message.get("type") == "end_stream":
                     await audio_queue.put({"end_stream": True})

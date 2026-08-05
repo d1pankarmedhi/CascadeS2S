@@ -19,35 +19,9 @@ from utils.logger import setup_logger
 
 load_dotenv()
 
-OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://ollama:11434")
-MODEL_NAME = "qwen2.5:0.5b"
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+MODEL_NAME = "qwen3.5:0.8b"
 logger = setup_logger("llm_worker")
-
-model_ready = False
-client = ollama.Client(host=OLLAMA_HOST)
-
-def ensure_model_pulled():
-    global model_ready
-    while not model_ready:
-        try:
-            logger.info(f"Checking for model {MODEL_NAME}...")
-            models_response = client.list()
-            models_list = models_response.get('models', []) if isinstance(models_response, dict) else getattr(models_response, 'models', [])
-            
-            for m in models_list:
-                name = m.get('name', '') if isinstance(m, dict) else getattr(m, 'model', getattr(m, 'name', ''))
-                if name == MODEL_NAME or name.startswith(MODEL_NAME + ":"):
-                    logger.info(f"Model {MODEL_NAME} is already available.")
-                    model_ready = True
-                    return
-
-            logger.info(f"Model {MODEL_NAME} not found. Starting pull...")
-            client.pull(MODEL_NAME)
-            logger.info(f"Model {MODEL_NAME} successfully pulled.")
-            model_ready = True
-        except Exception as e:
-            logger.error(f"Failed to check/pull model {MODEL_NAME}: {e}. Retrying in 30s...")
-            time.sleep(30)
 
 class LLMServiceServicer(voice_pb2_grpc.LLMServiceServicer):
     def GenerateStream(self, request_iterator, context):
@@ -63,7 +37,7 @@ class LLMServiceServicer(voice_pb2_grpc.LLMServiceServicer):
             if request.end_stream:
                 break
                 
-        if not text_input.strip() or not model_ready:
+        if not text_input.strip():
             yield voice_pb2.LLMEvent(session_id=session_id, stream_finished=True)
             return
 
@@ -78,28 +52,31 @@ class LLMServiceServicer(voice_pb2_grpc.LLMServiceServicer):
                     {'role': 'user', 'content': text_input.strip()},
                 ],
                 stream=True,
+                think=False
             )
 
+            yielded_text = ""
             for chunk in stream:
                 # context.is_active() checks if client disconnected
                 if not context.is_active():
                     break
-                content = chunk['message']['content']
+                content = chunk.message.content
                 yield voice_pb2.LLMEvent(
                     session_id=session_id,
                     text_chunk=content,
                     llm_latency_ms=(time.time() - start_time) * 1000
                 )
+                yielded_text += content
                 
             yield voice_pb2.LLMEvent(session_id=session_id, stream_finished=True)
-            logger.info(f"Generation complete for session {session_id}")
+            logger.info(f"Generation complete for session {session_id}: {yielded_text.strip()}")
             
         except Exception as e:
             logger.error(f"Error in LLM stream: {e}")
 
-def serve():
-    threading.Thread(target=ensure_model_pulled, daemon=True).start()
-    
+client = ollama.Client(host=OLLAMA_HOST)
+
+def serve():    
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     voice_pb2_grpc.add_LLMServiceServicer_to_server(LLMServiceServicer(), server)
     server.add_insecure_port("[::]:50052")

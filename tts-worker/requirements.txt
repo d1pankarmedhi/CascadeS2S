@@ -1,8 +1,0 @@
-grpcio>=1.62.0
-pocket-tts
-scipy
-soundfile
-torch
-torchaudio
-transformers
-accelerate

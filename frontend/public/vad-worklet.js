@@ -2,7 +2,7 @@
 class VADProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
-    this.threshold = 0.015; // Energy threshold for speech
+    this.threshold = 0.0008; // Energy threshold for speech
     this.isSpeaking = false;
     this.silenceFrames = 0;
     this.silenceThreshold = 30; // Frames of silence before speech_ended
@@ -13,6 +13,8 @@ class VADProcessor extends AudioWorkletProcessor {
     if (!input || input.length === 0) return true;
 
     const channel = input[0];
+    if (!channel) return true;
+    
     let sum = 0;
     for (let i = 0; i < channel.length; i++) {
       sum += channel[i] * channel[i];
@@ -26,8 +28,6 @@ class VADProcessor extends AudioWorkletProcessor {
         this.isSpeaking = true;
         this.port.postMessage({ type: 'speech_started', energy: rms });
       }
-      // We pass the raw Float32Array to the main thread
-      this.port.postMessage({ type: 'audio', data: channel }); 
     } else {
       this.silenceFrames++;
       if (this.isSpeaking && this.silenceFrames > this.silenceThreshold) {
@@ -35,6 +35,10 @@ class VADProcessor extends AudioWorkletProcessor {
         this.port.postMessage({ type: 'speech_ended' });
       }
     }
+    
+    // Always stream audio to the backend so it can do its own VAD and semantic barge-in
+    const channelData = new Float32Array(channel);
+    this.port.postMessage({ type: 'audio', data: channelData });
 
     // Always report energy for UI orb scaling
     this.port.postMessage({ type: 'energy', value: rms });

@@ -9,23 +9,30 @@ dependencies = [
   "google-genai>=1.31.0",
   "faster-whisper>=1.0.0",
   "redis>=6.4.0",
-  "torch>=2.8.0",
+  "torch>=2.0.0",
   "uvicorn>=0.35.0",
   "websockets>=12.0",
   "pydub>=0.25.1",
   "soundfile>=0.12.1",
   "python-multipart>=0.0.6",
+  "grpcio>=1.83.0",
+  "grpcio-tools>=1.83.0",
+  "protobuf>=7.35.1",
 ]
 
 [[tool.uv.index]]
 explicit = true
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
 
 [tool.uv.sources]
 torch = [
-  {index = "pytorch-cpu"},
+  {index = "pytorch-cu121"},
 ]
 torchvision = [
-  {index = "pytorch-cpu"},
+  {index = "pytorch-cu121"},
 ]
+
+[tool.uv.workspace]
+members = ["api", "llm-worker", "stt-worker", "tts-worker"]
+

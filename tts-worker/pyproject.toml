@@ -1,0 +1,13 @@
+[project]
+name = "tts-worker"
+version = "0.1.0"
+dependencies = [
+    "accelerate",
+    "grpcio>=1.62.0",
+    "pocket-tts",
+    "scipy",
+    "soundfile",
+    "torch>=2.0.0",
+    "torchaudio",
+    "transformers",
+]

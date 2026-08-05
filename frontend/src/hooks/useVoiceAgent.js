@@ -18,6 +18,7 @@ export function useVoiceAgent() {
     setStatus('idle');
     try {
       playContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
       gainNodeRef.current = playContextRef.current.createGain();
       gainNodeRef.current.connect(playContextRef.current.destination);
 
@@ -120,18 +121,26 @@ export function useVoiceAgent() {
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
       });
       
-      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-      await audioContextRef.current.audioWorklet.addModule('/static/vad-worklet.js');
+      if (audioContextRef.current.state === 'suspended') {
+        await audioContextRef.current.resume();
+      }
+      
+      await audioContextRef.current.audioWorklet.addModule('/vad-worklet.js');
       
       const source = audioContextRef.current.createMediaStreamSource(streamRef.current);
       workletNodeRef.current = new AudioWorkletNode(audioContextRef.current, 'vad-processor');
       
       let speechTimer = null;
 
+      let lastEnergyTime = 0;
       workletNodeRef.current.port.onmessage = (e) => {
         const msg = e.data;
         if (msg.type === 'energy') {
-          setMicEnergy(msg.value);
+          const now = performance.now();
+          if (now - lastEnergyTime > 50) {
+            setMicEnergy(msg.value);
+            lastEnergyTime = now;
+          }
         } else if (msg.type === 'speech_started') {
           setStatus('listening');
           if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -144,7 +153,6 @@ export function useVoiceAgent() {
           setStatus('thinking');
           if (wsRef.current?.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({ type: 'speech_ended' }));
-            wsRef.current.send(JSON.stringify({ type: 'end_stream' })); 
           }
         } else if (msg.type === 'audio') {
           if (wsRef.current?.readyState === WebSocket.OPEN) {

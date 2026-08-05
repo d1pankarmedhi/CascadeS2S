@@ -4,7 +4,7 @@
 <br>Built with <b>FastAPI</b>, <b>React</b>, <b>WebSockets</b>, and <b>gRPC</b>. Supported by <b>faster-whisper</b> and <b>Pocket TTS</b>.
 </p>
 
-![Python](https://img.shields.io/badge/Python-blue.svg?style=flat&logo=python&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=fff) ![gRPC](https://img.shields.io/badge/gRPC-244C5A.svg?logo=grpc&logoColor=white) ![React](https://img.shields.io/badge/React-20232A?style=flat&logo=react&logoColor=61DAFB)
+![Python](https://img.shields.io/badge/Python-blue.svg?style=flat&logo=python&logoColor=white) ![gRPC](https://img.shields.io/badge/gRPC-244C5A.svg?logo=grpc&logoColor=white) ![React](https://img.shields.io/badge/React-20232A?style=flat&logo=react&logoColor=61DAFB)
 
 <img width="800" alt="interface" src="assets/interface.png" />
 </div>
@@ -21,15 +21,20 @@
 ## 🚀 Quick Start
 
 ### 1. Requirements
-Ensure you have **Docker** and **Docker Compose** installed.
-You will also need **Node.js** for the frontend.
+Ensure you have **Python 3.10+** installed, as well as **Node.js** for the frontend.
+You must also have [Ollama](https://ollama.com/) running locally.
 
-### 2. Launch Backend Services
+### 2. Install Backend Dependencies
 ```bash
-./manage.sh start
+uv sync --all-packages
 ```
 
-### 3. Launch Frontend UI
+### 3. Launch Backend Services
+```bash
+./start_local.sh
+```
+
+### 4. Launch Frontend UI
 In a new terminal:
 ```bash
 cd frontend
